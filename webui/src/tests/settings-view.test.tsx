@@ -652,6 +652,66 @@ describe("SettingsView Apps catalog", () => {
     expect(screen.queryByText("Uninstalled CLI for AnyGen.")).not.toBeInTheDocument();
   });
 
+  it("sets up and enables an installed Agent Plugin explicitly", async () => {
+    const plugin = {
+      name: "plugin-nanobot-computer-use",
+      display_name: "Computer Use",
+      description: "Control the desktop with a live preview.",
+      category: "Productivity",
+      docs_url: "https://github.com/nanobot-dev/nanobot-computer-use",
+      transport: "stdio",
+      requires: "screen-recording, accessibility",
+      note: "",
+      install_supported: true,
+      installed: true,
+      configured: false,
+      available: false,
+      status: "not_installed",
+      logo_url: null,
+      brand_color: "#ff7a1a",
+      required_fields: [],
+      connection_summary: "computer-use",
+      source: "agent-plugin",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/settings") return jsonResponse(settingsPayload());
+      if (url === "/api/settings/cli-apps") {
+        return jsonResponse({ apps: [], installed_count: 0 });
+      }
+      if (url === "/api/settings/mcp-presets") {
+        return jsonResponse({ presets: [plugin], installed_count: 0 });
+      }
+      if (url === "/api/settings/mcp-presets/enable?name=plugin-nanobot-computer-use") {
+        return jsonResponse({
+          presets: [{ ...plugin, configured: true, available: true, status: "configured" }],
+          installed_count: 1,
+          last_action: { ok: true, message: "Computer Use enabled." },
+        });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderSettingsView();
+
+    expect(await screen.findByText("Computer Use")).toBeInTheDocument();
+    expect(screen.getByText("Plugin")).toBeInTheDocument();
+    expect(
+      screen.getByText("Control the desktop with a live preview. · screen-recording, accessibility"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Enable" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings/mcp-presets/enable?name=plugin-nanobot-computer-use",
+        expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
+      );
+    });
+    expect(await screen.findByText("Computer Use enabled.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Plugin enabled" })).toBeInTheDocument();
+  });
+
   it("keeps runtime dependencies out of Apps and explains chat mentions", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

@@ -5,11 +5,12 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
-from nanobot.agent.agent_plugins import discover_agent_plugin_skills
+if TYPE_CHECKING:
+    from nanobot.agent.agent_plugins import AgentPluginSkill
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -35,7 +36,7 @@ class SkillsLoader:
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
-        self.plugin_skills = discover_agent_plugin_skills(workspace)
+        self.plugin_skills: list[AgentPluginSkill] = []
 
     def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
         if not base.exists():
@@ -63,6 +64,8 @@ class SkillsLoader:
         Returns:
             List of skill info dicts with 'name', 'path', 'source'.
         """
+        from nanobot.agent.agent_plugins import discover_agent_plugin_skills
+
         self.plugin_skills = discover_agent_plugin_skills(self.workspace)
         skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
         seen_names = {entry["name"] for entry in skills}
@@ -103,8 +106,12 @@ class SkillsLoader:
         workspace_path = self.workspace_skills / name / "SKILL.md"
         if workspace_path.exists():
             return workspace_path.read_text(encoding="utf-8")
+        if not self.plugin_skills:
+            from nanobot.agent.agent_plugins import discover_agent_plugin_skills
+
+            self.plugin_skills = discover_agent_plugin_skills(self.workspace)
         for plugin_skill in self.plugin_skills:
-            if plugin_skill.name == name:
+            if plugin_skill.name == name and plugin_skill.path.is_file():
                 return plugin_skill.path.read_text(encoding="utf-8")
         if self.builtin_skills:
             builtin_path = self.builtin_skills / name / "SKILL.md"

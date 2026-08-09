@@ -17,6 +17,7 @@ from typing import Any, cast
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
+from nanobot.agent.agent_plugins import agent_plugins_payload
 from nanobot.agent.tools.image_generation import request_image_generation_reload
 from nanobot.agent.tools.mcp import request_mcp_reload
 from nanobot.api.runtime import ApiRuntime, ApiStartOptions, api_runtime_paths
@@ -280,12 +281,12 @@ class WebUISettingsRouter:
         if path == "/api/settings/pairing/deny":
             return self._handle_settings_pairing_action(request, "deny")
         if path == "/api/settings/mcp-presets":
-            return await self._handle_settings_mcp_presets(request)
+            return await self._handle_settings_mcp_presets(connection, request)
         if path == "/api/settings/version-check":
             return await self._handle_settings_version_check(request)
         mcp_action = _MCP_PRESET_ACTIONS_BY_PATH.get(path)
         if mcp_action is not None:
-            return await self._handle_settings_mcp_presets(request, mcp_action)
+            return await self._handle_settings_mcp_presets(connection, request, mcp_action)
         return None
 
     @staticmethod
@@ -1208,15 +1209,33 @@ class WebUISettingsRouter:
 
     async def _handle_settings_mcp_presets(
         self,
+        connection: Any,
         request: WsRequest,
         action: str | None = None,
     ) -> Response:
         if not self._authorized(request):
             return self._unauthorized()
         try:
+            query = self._parse_mcp_settings_query(request)
+            name = (_query_first(query, "name") or "").strip()
+            if action == "enable" and name.startswith("plugin-"):
+                config = load_config()
+                plugin_names = {
+                    f"plugin-{plugin['name']}"
+                    for plugin in agent_plugins_payload(config.workspace_path)["plugins"]
+                }
+                if (
+                    name not in config.tools.mcp_servers
+                    and name in plugin_names
+                    and not self._allow_feature_package_install(connection, request)
+                ):
+                    return self._error_response(
+                        403,
+                        "Agent Plugin setup is restricted to the local WebUI",
+                    )
             payload = await mcp_presets_settings_action(
                 action,
-                self._parse_mcp_settings_query(request),
+                query,
                 reload_mcp=lambda: request_mcp_reload(self.bus),
                 config=self.settings.config,
             )

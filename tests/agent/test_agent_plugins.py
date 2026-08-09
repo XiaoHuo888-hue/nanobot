@@ -1,10 +1,20 @@
 import json
 import shutil
+import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
-from nanobot.agent.agent_plugins import AGENT_PLUGIN_SCHEMA, discover_agent_plugin_skills
+from nanobot.agent import agent_plugins
+from nanobot.agent.agent_plugins import (
+    AGENT_PLUGIN_MCP_SCHEMA,
+    AGENT_PLUGIN_SCHEMA,
+    agent_plugin_mcp_servers,
+    agent_plugins_payload,
+    discover_agent_plugin_skills,
+    set_agent_plugin_enabled,
+)
 from nanobot.agent.skills import SkillsLoader
 
 
@@ -170,3 +180,141 @@ def test_plugin_skill_symlink_cannot_escape_plugin_root(tmp_path: Path) -> None:
         pytest.skip(f"directory symlink unavailable: {exc}")
 
     assert discover_agent_plugin_skills(tmp_path) == []
+
+
+def test_plugin_mcp_requires_explicit_enable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        agent_plugins,
+        "get_config_path",
+        lambda: tmp_path / "config" / "config.json",
+    )
+    plugin = _write_plugin(tmp_path, "desktop")
+    executable = plugin / "bin" / "server"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    (plugin / "mcp.json").write_text(
+        json.dumps(
+            {
+                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
+                "mcpServers": {
+                    "desktop": {
+                        "type": "stdio",
+                        "command": "./bin/server",
+                        "args": ["--data", "${PLUGIN_DATA}/state"],
+                        "cwd": "${PLUGIN_ROOT}",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert agent_plugin_mcp_servers(tmp_path) == {}
+    set_agent_plugin_enabled(tmp_path, "desktop", True)
+
+    servers = agent_plugin_mcp_servers(tmp_path)
+    server = servers["desktop"]
+    assert server.command == str(executable)
+    assert server.cwd == str(plugin)
+    assert server.env["PLUGIN_ROOT"] == str(plugin)
+    assert server.args[0] == "--data"
+    assert server.args[1].endswith("/state")
+
+    set_agent_plugin_enabled(tmp_path, "desktop", False)
+    assert agent_plugin_mcp_servers(tmp_path) == {}
+
+
+def test_plugin_setup_command_runs_once_per_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_plugins,
+        "get_config_path",
+        lambda: tmp_path / "config" / "config.json",
+    )
+    monkeypatch.setenv("NANOBOT_TEST_SECRET", "do-not-inherit")
+    plugin = _write_plugin(
+        tmp_path,
+        "desktop",
+        manifest={
+            "$schema": AGENT_PLUGIN_SCHEMA,
+            "name": "desktop",
+            "version": "1.2.3",
+            "extensions": {"dev.nanobot": {"installCommand": ["./bin/install"]}},
+        },
+    )
+    executable = plugin / "bin" / "install"
+    executable.parent.mkdir()
+    executable.write_text("setup", encoding="utf-8")
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def run(command: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append((command, cast(dict[str, str], kwargs["env"])))
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(agent_plugins.subprocess, "run", run)
+
+    set_agent_plugin_enabled(tmp_path, "desktop", True)
+    set_agent_plugin_enabled(tmp_path, "desktop", False)
+    set_agent_plugin_enabled(tmp_path, "desktop", True)
+
+    assert len(calls) == 1
+    assert calls[0][0] == (str(executable),)
+    assert calls[0][1]["PLUGIN_ROOT"] == str(plugin)
+    assert "NANOBOT_TEST_SECRET" not in calls[0][1]
+    assert agent_plugins_payload(tmp_path)["plugins"][0]["setup_required"] is False
+
+
+def test_invalid_plugin_mcp_entries_do_not_block_valid_servers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_plugins,
+        "get_config_path",
+        lambda: tmp_path / "config" / "config.json",
+    )
+    plugin = _write_plugin(tmp_path, "network")
+    executable = plugin / "bin" / "server"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    (plugin / "mcp.json").write_text(
+        json.dumps(
+            {
+                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
+                "mcpServers": {
+                    "public-http": {"type": "streamable-http", "url": "http://example.com/mcp"},
+                    "local": {"type": "stdio", "command": "./bin/server"},
+                    "escape": {"type": "stdio", "command": "../outside"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    set_agent_plugin_enabled(tmp_path, "network", True)
+
+    assert list(agent_plugin_mcp_servers(tmp_path)) == ["network"]
+
+
+def test_plugin_state_symlink_cannot_escape_config_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "config"
+    outside = tmp_path / "outside"
+    config.mkdir()
+    outside.mkdir()
+    try:
+        (config / "plugin-data").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+    monkeypatch.setattr(
+        agent_plugins,
+        "get_config_path",
+        lambda: config / "config.json",
+    )
+    _write_plugin(tmp_path, "desktop")
+
+    with pytest.raises(RuntimeError, match="escapes the nanobot config directory"):
+        set_agent_plugin_enabled(tmp_path, "desktop", True)

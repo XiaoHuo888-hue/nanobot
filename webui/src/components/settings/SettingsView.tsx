@@ -7411,7 +7411,11 @@ function AppsCatalogSettings({
   ]
     .filter((item) => {
       if (normalizedQuery) return appsSearchText(item).includes(normalizedQuery);
-      return filter === "ready" ? appsReady(item) : item.kind === filter;
+      if (filter === "ready") return appsReady(item);
+      if (filter === "cli") {
+        return item.kind === "cli" || item.preset.source === "agent-plugin";
+      }
+      return item.kind === "mcp" && item.preset.source !== "agent-plugin";
     })
     .sort((left, right) => {
       const rank = Number(!appsReady(left)) - Number(!appsReady(right));
@@ -7694,6 +7698,7 @@ function McpAppsCatalogRow({
   const testBusy = actionKey === `test:${preset.name}`;
   const toolsBusy = actionKey === `tools:${preset.name}`;
   const busy = enableBusy || removeBusy || testBusy || toolsBusy;
+  const agentPlugin = preset.source === "agent-plugin";
   const missingFields = preset.required_fields.filter((field) => field.required && !field.configured);
   const hasFields = preset.required_fields.length > 0;
   const needsSetupInput = missingFields.length > 0;
@@ -7705,8 +7710,13 @@ function McpAppsCatalogRow({
   const enabledTools = preset.enabled_tools ?? ["*"];
   const allowAllTools = enabledTools.includes("*");
   const enabledSet = new Set(allowAllTools ? toolNames : enabledTools);
-  const description = preset.description || preset.note || preset.requires || preset.name;
-  const statusLabel = mcpPresetStatusLabel(preset.status, tx);
+  const description = preset.description || preset.note || preset.name;
+  const detail = agentPlugin && preset.requires
+    ? `${description} · ${preset.requires}`
+    : description || preset.requires;
+  const statusLabel = agentPlugin
+    ? tx("settings.apps.pluginEnabled", "Plugin enabled")
+    : mcpPresetStatusLabel(preset.status, tx);
 
   useEffect(() => {
     if (preset.configured || !preset.install_supported) setSetupOpen(false);
@@ -7739,9 +7749,13 @@ function McpAppsCatalogRow({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{preset.display_name}</h3>
-            <AppsTypeBadge>{tx("settings.apps.mcpLabel", "Integration")}</AppsTypeBadge>
+            <AppsTypeBadge>
+              {agentPlugin
+                ? tx("settings.apps.pluginLabel", "Plugin")
+                : tx("settings.apps.mcpLabel", "Integration")}
+            </AppsTypeBadge>
           </div>
-          <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{description}</p>
+          <p className="mt-0.5 truncate text-[12.5px] leading-5 text-muted-foreground">{detail}</p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {readyInstalled ? (
@@ -7758,35 +7772,41 @@ function McpAppsCatalogRow({
                   </AppsActionButton>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem disabled={busy} onClick={() => onAction("test", preset.name)}>
-                    <PlayCircle aria-hidden />
-                    {tx("settings.mcp.test", "Test")}
-                  </DropdownMenuItem>
-                  {toolNames.length ? (
+                  {!agentPlugin ? (
+                    <DropdownMenuItem disabled={busy} onClick={() => onAction("test", preset.name)}>
+                      <PlayCircle aria-hidden />
+                      {tx("settings.mcp.test", "Test")}
+                    </DropdownMenuItem>
+                  ) : null}
+                  {!agentPlugin && toolNames.length ? (
                     <DropdownMenuItem disabled={busy} onClick={() => setToolsOpen((open) => !open)}>
                       <SlidersHorizontal aria-hidden />
                       {tx("settings.mcp.toolScope", "Tools")}
                     </DropdownMenuItem>
                   ) : null}
                   <DropdownMenuItem
-                    tone="destructive"
+                    tone={agentPlugin ? undefined : "destructive"}
                     disabled={busy}
                     onClick={() => onAction("remove", preset.name)}
                   >
-                    <Trash2 aria-hidden />
-                    {tx("settings.mcp.remove", "Remove")}
+                    {agentPlugin ? <PauseCircle aria-hidden /> : <Trash2 aria-hidden />}
+                    {agentPlugin
+                      ? tx("settings.apps.pluginDisable", "Disable")
+                      : tx("settings.mcp.remove", "Remove")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <AppsActionButton
-                ariaLabel={tx("settings.mcp.remove", "Remove")}
-                busy={removeBusy}
-                disabled={busy && !removeBusy}
-                tone="danger"
-                onClick={() => onAction("remove", preset.name)}
-              >
-                <Trash2 className="h-4 w-4" aria-hidden />
-              </AppsActionButton>
+              {!agentPlugin ? (
+                <AppsActionButton
+                  ariaLabel={tx("settings.mcp.remove", "Remove")}
+                  busy={removeBusy}
+                  disabled={busy && !removeBusy}
+                  tone="danger"
+                  onClick={() => onAction("remove", preset.name)}
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden />
+                </AppsActionButton>
+              ) : null}
             </>
           ) : preset.installed && !preset.configured ? (
             <AppsActionButton

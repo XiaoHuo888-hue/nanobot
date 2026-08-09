@@ -1,22 +1,66 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
+from nanobot.agent.agent_plugins import AGENT_PLUGIN_MCP_SCHEMA, AGENT_PLUGIN_SCHEMA
 from nanobot.config.loader import load_config
 from nanobot.webui.mcp_presets_api import (
     McpPresetError,
     custom_mcp_action,
     mcp_presets_action,
     mcp_presets_payload,
+    mcp_presets_settings_action,
     mcp_presets_test_action,
     normalize_mcp_preset_mentions,
 )
 
 
 def _use_config(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("nanobot.config.loader._current_config_path", tmp_path / "config.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "workspace")}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+
+
+def _write_agent_plugin(workspace: Path) -> None:
+    root = workspace / "plugins" / "desktop"
+    command = root / "bin" / "server"
+    command.parent.mkdir(parents=True, exist_ok=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "plugin.json").write_text(
+        json.dumps(
+            {
+                "$schema": AGENT_PLUGIN_SCHEMA,
+                "name": "desktop",
+                "description": "Control the local desktop.",
+                "extensions": {
+                    "dev.nanobot": {
+                        "displayName": "Desktop Control",
+                        "accentColor": "#ff7a1a",
+                        "permissions": ["screen-recording"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "mcp.json").write_text(
+        json.dumps(
+            {
+                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
+                "mcpServers": {
+                    "desktop": {"type": "stdio", "command": "./bin/server"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_mcp_presets_payload_lists_supported_cards(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,6 +97,65 @@ def test_mcp_presets_payload_lists_supported_cards(tmp_path, monkeypatch: pytest
     assert manifest["install"]["strategy"] == "config"
     assert manifest["remove"]["verification"] == ["config_absent"]
     assert manifest["trust"]["review_status"] == "builtin_preset"
+
+
+def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_config(tmp_path, monkeypatch)
+    _write_agent_plugin(load_config().workspace_path)
+
+    row = next(item for item in mcp_presets_payload()["presets"] if item["source"] == "agent-plugin")
+    assert row["name"] == "plugin-desktop"
+    assert row["display_name"] == "Desktop Control"
+    assert row["installed"] is True
+    assert row["configured"] is False
+
+    async def reload() -> dict[str, object]:
+        return {"ok": True, "message": "MCP reloaded.", "requires_restart": False}
+
+    enabled = asyncio.run(
+        mcp_presets_settings_action(
+            "enable",
+            {"name": ["plugin-desktop"]},
+            reload_mcp=reload,
+        )
+    )
+    enabled_row = next(item for item in enabled["presets"] if item["name"] == "plugin-desktop")
+    assert enabled_row["configured"] is True
+    assert enabled["requires_restart"] is False
+
+    disabled = asyncio.run(
+        mcp_presets_settings_action(
+            "remove",
+            {"name": ["plugin-desktop"]},
+            reload_mcp=reload,
+        )
+    )
+    disabled_row = next(item for item in disabled["presets"] if item["name"] == "plugin-desktop")
+    assert disabled_row["configured"] is False
+
+
+def test_explicit_mcp_config_wins_over_plugin_catalog_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_config(tmp_path, monkeypatch)
+    config_path = tmp_path / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["tools"] = {
+        "mcpServers": {"plugin-desktop": {"type": "stdio", "command": "echo"}}
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    _write_agent_plugin(load_config().workspace_path)
+
+    rows = [
+        item for item in mcp_presets_payload()["presets"] if item["name"] == "plugin-desktop"
+    ]
+
+    assert len(rows) == 1
+    assert rows[0]["source"] == "custom"
 
 
 def test_enable_browserbase_writes_scrubbed_config_payload(

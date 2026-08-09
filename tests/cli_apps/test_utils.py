@@ -66,16 +66,14 @@ def test_structured_cli_app_attachment_uses_existing_legacy_skill(tmp_path):
     legacy.parent.mkdir(parents=True)
     legacy.write_text("# Legacy Uni-Mol\n", encoding="utf-8")
 
-    lines = runtime_lines(
-        SimpleNamespace(
-            content="please use @unimol_tools",
-            metadata={
-                "cli_apps": [{
-                    "name": "unimol_tools",
-                    "entry_point": "cli-anything-unimol-tools",
-                }],
-            },
-        ),
+    lines = runtime_lines_for_request(
+        "please use @unimol_tools",
+        {
+            "cli_apps": [{
+                "name": "unimol_tools",
+                "entry_point": "cli-anything-unimol-tools",
+            }],
+        },
         tmp_path,
     )
 
