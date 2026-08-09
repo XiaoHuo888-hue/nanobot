@@ -654,11 +654,11 @@ describe("SettingsView Apps catalog", () => {
 
   it("sets up and enables an installed Agent Plugin explicitly", async () => {
     const plugin = {
-      name: "plugin-nanobot-computer-use",
+      name: "plugin-computer-use",
       display_name: "Computer Use",
       description: "Control the desktop with a live preview.",
       category: "Productivity",
-      docs_url: "https://github.com/nanobot-dev/nanobot-computer-use",
+      docs_url: "https://github.com/nanobot-dev/computer-use",
       transport: "stdio",
       requires: "screen-recording, accessibility",
       note: "",
@@ -682,7 +682,7 @@ describe("SettingsView Apps catalog", () => {
       if (url === "/api/settings/mcp-presets") {
         return jsonResponse({ presets: [plugin], installed_count: 0 });
       }
-      if (url === "/api/settings/mcp-presets/enable?name=plugin-nanobot-computer-use") {
+      if (url === "/api/settings/mcp-presets/enable?name=plugin-computer-use") {
         return jsonResponse({
           presets: [{ ...plugin, configured: true, available: true, status: "configured" }],
           installed_count: 1,
@@ -704,7 +704,7 @@ describe("SettingsView Apps catalog", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings/mcp-presets/enable?name=plugin-nanobot-computer-use",
+        "/api/settings/mcp-presets/enable?name=plugin-computer-use",
         expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
       );
     });
