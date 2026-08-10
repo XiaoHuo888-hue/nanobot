@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from mcp.types import Prompt, Resource
     from mcp.types import Tool as MCPToolDefinition
 
+    from nanobot.agent.tools.mcp_oauth import MCPOAuthHandlers
     from nanobot.config.schema import MCPServerConfig
 
 # Transient connection errors that warrant a single retry.
@@ -182,6 +183,25 @@ def _sanitize_mcp_tool_name(name: str) -> str:
 def _is_transient(exc: BaseException) -> bool:
     """Check if an exception looks like a transient connection error."""
     return type(exc).__name__ in _TRANSIENT_EXC_NAMES
+
+
+def _is_transient_connection_failure(exc: BaseException) -> bool:
+    if isinstance(exc, BaseExceptionGroup):
+        group = cast(BaseExceptionGroup[BaseException], exc)
+        return bool(group.exceptions) and all(
+            _is_transient_connection_failure(nested) for nested in group.exceptions
+        )
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) or _is_transient(exc)
+
+
+def _log_mcp_connection_failure(name: str, exc: BaseException, hint: str = "") -> None:
+    if _is_transient_connection_failure(exc):
+        logger.warning("MCP server '{}': transient connection failure", name)
+        logger.opt(exception=exc).debug(
+            "MCP server '{}' transient connection failure details", name
+        )
+        return
+    logger.opt(exception=exc).error("MCP server '{}': failed to connect: {}", name, hint)
 
 
 def _is_session_terminated(exc: BaseException) -> bool:
@@ -961,7 +981,10 @@ class MCPPromptWrapper(_MCPWrapperBase):
 
 
 async def connect_mcp_servers(
-    mcp_servers: "dict[str, MCPServerConfig]", registry: ToolRegistry
+    mcp_servers: "dict[str, MCPServerConfig]",
+    registry: ToolRegistry,
+    *,
+    oauth_handlers: Mapping[str, "MCPOAuthHandlers"] | None = None,
 ) -> dict[str, MCPConnection]:
     """Connect to configured MCP servers and register their tools, resources, prompts.
 
@@ -1001,6 +1024,29 @@ async def connect_mcp_servers(
                     )
                     return False
 
+            oauth_auth: httpx.Auth | None = None
+            if cfg.auth == "oauth":
+                if transport_type not in {"sse", "streamableHttp"}:
+                    logger.warning(
+                        "MCP server '{}': OAuth requires an SSE or Streamable HTTP transport",
+                        name,
+                    )
+                    return False
+                from nanobot.agent.tools.mcp_oauth import (
+                    MCPAuthorizationRequiredError,
+                    create_mcp_oauth_auth,
+                )
+
+                try:
+                    oauth_auth = await create_mcp_oauth_auth(
+                        name,
+                        cfg.url,
+                        (oauth_handlers or {}).get(name),
+                    )
+                except MCPAuthorizationRequiredError:
+                    logger.info("MCP server '{}': waiting for browser authorization", name)
+                    return False
+
             if transport_type == "stdio":
                 command, args, env = _normalize_windows_stdio_command(
                     cfg.command,
@@ -1038,22 +1084,30 @@ async def connect_mcp_servers(
                         **_pinned_transport_kwargs(),
                     )
 
+                sse_kwargs: dict[str, Any] = {
+                    "httpx_client_factory": httpx_client_factory,
+                }
+                if oauth_auth is not None:
+                    sse_kwargs["auth"] = oauth_auth
                 read, write = await server_stack.enter_async_context(
-                    sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
+                    sse_client(cfg.url, **sse_kwargs)
                 )
             elif transport_type == "streamableHttp":
                 if not await _probe_http_url(cfg.url):
                     logger.warning("MCP server '{}': {} unreachable, skipping", name, _redact_url(cfg.url))
                     return False
 
+                http_client_kwargs: dict[str, Any] = {
+                    "headers": cfg.headers or None,
+                    "event_hooks": {"request": [_validate_mcp_request_url]},
+                    "follow_redirects": True,
+                    "timeout": httpx.Timeout(30.0, connect=10.0),
+                    **_pinned_transport_kwargs(),
+                }
+                if oauth_auth is not None:
+                    http_client_kwargs["auth"] = oauth_auth
                 http_client = await server_stack.enter_async_context(
-                    httpx.AsyncClient(
-                        headers=cfg.headers or None,
-                        event_hooks={"request": [_validate_mcp_request_url]},
-                        follow_redirects=True,
-                        timeout=httpx.Timeout(30.0, connect=10.0),
-                        **_pinned_transport_kwargs(),
-                    )
+                    httpx.AsyncClient(**http_client_kwargs)
                 )
                 read, write, _ = await server_stack.enter_async_context(
                     streamable_http_client(cfg.url, http_client=http_client)
@@ -1182,7 +1236,7 @@ async def connect_mcp_servers(
                     " Hint: this looks like stdio protocol pollution. Make sure the MCP server writes "
                     "only JSON-RPC to stdout and sends logs/debug output to stderr instead."
                 )
-            logger.exception("MCP server '{}': failed to connect: {}", name, hint)
+            _log_mcp_connection_failure(name, e, hint)
             return False
 
     async def connect_single_server(
@@ -1229,7 +1283,7 @@ async def connect_mcp_servers(
         try:
             result = await connect_single_server(name, cfg)
         except Exception as e:
-            logger.exception("MCP server '{}' connection failed: {}", name, e)
+            _log_mcp_connection_failure(name, e)
             continue
         if result[1] is not None:
             server_stacks[result[0]] = result[1]
@@ -1306,6 +1360,13 @@ async def reload_servers(state: Any, registry: ToolRegistry) -> dict[str, Any]:
         current_servers = dict(state._mcp_servers)
         current_names = set(current_servers)
         next_names = set(next_servers)
+        from nanobot.agent.tools.mcp_oauth import mcp_oauth_has_credentials
+
+        authorization_pending = {
+            name
+            for name, cfg in next_servers.items()
+            if cfg.auth == "oauth" and not mcp_oauth_has_credentials(name, cfg.url)
+        }
         removed = sorted(current_names - next_names)
         added = sorted(next_names - current_names)
         changed = sorted(
@@ -1323,9 +1384,13 @@ async def reload_servers(state: Any, registry: ToolRegistry) -> dict[str, Any]:
         retry_missing = sorted(
             name
             for name in next_names
-            if name not in state._mcp_stacks and name not in set(added) | set(changed)
+            if name not in state._mcp_stacks
+            and name not in set(added) | set(changed)
+            and name not in authorization_pending
         )
-        to_connect_names = sorted(set(added) | set(changed) | set(retry_missing))
+        to_connect_names = sorted(
+            (set(added) | set(changed) | set(retry_missing)) - authorization_pending
+        )
         to_connect = {name: next_servers[name] for name in to_connect_names}
         connected: dict[str, MCPConnection] = {}
         if to_connect:

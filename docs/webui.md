@@ -204,8 +204,13 @@ turn. The default **Ready** view shows only tools that can be used immediately:
 - **Apps** are local command-line adapters that nanobot runs on your machine.
   Installing an adapter does not modify the native desktop or web app it
   connects to.
-- **Integrations** are MCP servers. Presets provide known configurations, and
-  the custom integration panel accepts stdio, HTTP, and SSE servers.
+- **MCP** lists Model Context Protocol servers. Presets provide known
+  configurations, and the **Add MCP server** panel accepts stdio, HTTP, and SSE
+  servers. Custom HTTP/SSE servers can use no authentication, OAuth, or request
+  headers. After saving an OAuth server, choose **Connect** to open its sign-in
+  page. Presets such as Xmind, Notion, and Linear already use OAuth. HTTPS and
+  localhost WebUIs return automatically; a remote plain-HTTP WebUI shows one
+  field for pasting the complete localhost callback URL.
 
 Apps intentionally does not list nanobot runtime support packages such as
 `api` or `bedrock`. Those packages enable providers, servers, or channels; they
@@ -226,8 +231,8 @@ endpoint and exposes `web_search` and `web_fetch` without requiring an API key.
 It is an optional integration and does not replace nanobot's built-in web search
 provider; mention `@parallel-search` when a turn should use it.
 
-After an App or integration is available, mention it from the composer with
-`@` to attach that tool to the next message.
+After an App or MCP server is available, mention it from the composer with `@`
+to attach that tool to the next message.
 
 ## Skills
 
