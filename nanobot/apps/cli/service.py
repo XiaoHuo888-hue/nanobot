@@ -212,26 +212,22 @@ def _as_object_dict(value: object) -> dict[str, Any] | None:
     return cast(dict[str, Any], value) if isinstance(value, dict) else None
 
 
-def _safe_skill_name(name: str) -> str:
-    clean = _SAFE_NAME_RE.sub("-", name.lower()).replace("_", "-").strip("-")
-    return f"cli-app-{clean or 'app'}"
-
-
-def _legacy_skill_name(name: str) -> str:
-    """Return the workspace skill name emitted before Agent Plugins support."""
+def _skill_name(name: str, *, legacy: bool = False) -> str:
     clean = _SAFE_NAME_RE.sub("-", name.lower()).strip("-")
+    if not legacy:
+        clean = clean.replace("_", "-")
     return f"cli-app-{clean or 'app'}"
 
 
 def _plugin_skill_relative_path(name: str) -> str:
-    skill_name = _safe_skill_name(name)
+    skill_name = _skill_name(name)
     return f"plugins/{skill_name}/skills/{skill_name}/SKILL.md"
 
 
 def cli_app_skill_relative_path(workspace: Path, name: str) -> str:
     """Return a CLI App's skill path, including the legacy location."""
     canonical = _plugin_skill_relative_path(name)
-    legacy = f"skills/{_legacy_skill_name(name)}/SKILL.md"
+    legacy = f"skills/{_skill_name(name, legacy=True)}/SKILL.md"
     if not (workspace / canonical).is_file() and (workspace / legacy).is_file():
         return legacy
     return canonical
@@ -733,7 +729,7 @@ class CliAppManager:
         entry_point = str(app.get("entry_point") or "")
         strategy = self._strategy(app)
         skill_path = _plugin_skill_relative_path(name)
-        plugin_path = f"plugins/{_safe_skill_name(name)}"
+        plugin_path = f"plugins/{_skill_name(name)}"
         capabilities = [
             compact_dict({
                 "type": "cli",
@@ -1054,7 +1050,7 @@ class CliAppManager:
         entry = str(app.get("entry_point") or f"cli-anything-{name}")
         description = (_catalog_description(app) or f"Use {display} from nanobot.")[:1024]
         return f"""---
-name: {_safe_skill_name(name)}
+name: {_skill_name(name)}
 description: {json.dumps(description, ensure_ascii=False)}
 ---
 
@@ -1096,18 +1092,18 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
         path = self.workspace / _plugin_skill_relative_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         content = self._fetch_skill_content(app) or self._fallback_skill(app)
-        content = normalize_skill_document(content, _safe_skill_name(name)) or self._fallback_skill(app)
+        content = normalize_skill_document(content, _skill_name(name)) or self._fallback_skill(app)
         content = self._with_nanobot_skill_note(content, app)
         path.write_text(content, encoding="utf-8")
         plugin_root = path.parents[2]
         manifest = compact_dict({
             "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": _safe_skill_name(str(app["name"])),
+            "name": _skill_name(str(app["name"])),
             "version": str(app.get("version") or ""),
             "description": _catalog_description(app),
         })
         _write_json(plugin_root / "plugin.json", manifest)
-        legacy_dir = self.workspace / "skills" / _legacy_skill_name(str(app["name"]))
+        legacy_dir = self.workspace / "skills" / _skill_name(str(app["name"]), legacy=True)
         if legacy_dir.is_dir():
             shutil.rmtree(legacy_dir)
         return path
@@ -1116,7 +1112,7 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
         plugin_root = (self.workspace / _plugin_skill_relative_path(name)).parents[2]
         if plugin_root.is_dir():
             shutil.rmtree(plugin_root)
-        legacy_dir = self.workspace / "skills" / _legacy_skill_name(name)
+        legacy_dir = self.workspace / "skills" / _skill_name(name, legacy=True)
         if legacy_dir.is_dir():
             shutil.rmtree(legacy_dir)
 
@@ -1128,7 +1124,7 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
         installed[str(app["name"])] = entry
         self._save_installed(installed)
         self.install_skill(app)
-        set_agent_plugin_enabled(self.workspace, _safe_skill_name(str(app["name"])), True)
+        set_agent_plugin_enabled(self.workspace, _skill_name(str(app["name"])), True)
         return entry
 
     def install(self, name: str) -> dict[str, Any]:

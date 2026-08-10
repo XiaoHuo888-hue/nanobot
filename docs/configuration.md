@@ -2309,18 +2309,8 @@ Disabled skills are excluded from the main agent's skill summary, from always-on
 ### Agent Plugins v1
 
 nanobot discovers [Agent Plugins](https://agent-plugins.org/) in
-`<workspace>/plugins/<plugin>/`. A v1 package has `plugin.json` and may provide skills, MCP
-servers, or both:
-
-```text
-plugins/
-└── release-tools/
-    ├── plugin.json
-    ├── mcp.json
-    └── skills/
-        └── release-notes/
-            └── SKILL.md
-```
+`<workspace>/plugins/<plugin>/`. A v1 package has `plugin.json` and may add `mcp.json`,
+`skills/<name>/SKILL.md`, or both.
 
 Directory presence means installed; activation is an explicit trust decision in **Apps**.
 Enabled skills use normal progressive loading and `$skill-name` invocation. Workspace skills

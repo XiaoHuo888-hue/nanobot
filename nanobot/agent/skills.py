@@ -104,18 +104,17 @@ class SkillsLoader:
         plugin_skills = enabled_agent_plugin_skills(self.workspace)
         skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
         seen_names = {entry["name"] for entry in skills}
-        for plugin_skill in plugin_skills:
-            if plugin_skill.name in seen_names:
+        for name, path in plugin_skills:
+            if name in seen_names:
                 continue
             skills.append(
                 {
-                    "name": plugin_skill.name,
-                    "path": str(plugin_skill.path),
+                    "name": name,
+                    "path": str(path),
                     "source": "plugin",
-                    "plugin": plugin_skill.plugin,
                 }
             )
-            seen_names.add(plugin_skill.name)
+            seen_names.add(name)
         if self.builtin_skills and self.builtin_skills.exists():
             skills.extend(
                 self._skill_entries_from_dir(self.builtin_skills, "builtin", skip_names=seen_names)

@@ -158,24 +158,15 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
     with pytest.raises(McpPresetError, match="enable and disable"):
         asyncio.run(plugin_action("remove"))
 
-
-def test_explicit_mcp_config_wins_over_plugin_catalog_name(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _use_config(tmp_path, monkeypatch)
     config_path = tmp_path / "config.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["tools"] = {
         "mcpServers": {"plugin-desktop": {"type": "stdio", "command": "echo"}}
     }
     config_path.write_text(json.dumps(config), encoding="utf-8")
-    _write_agent_plugin(load_config().workspace_path)
-
     rows = [
         item for item in mcp_presets_payload()["presets"] if item["name"] == "plugin-desktop"
     ]
-
     assert len(rows) == 1
     assert rows[0]["source"] == "custom"
 

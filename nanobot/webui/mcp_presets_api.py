@@ -878,8 +878,6 @@ def _agent_plugin_payload(state: AgentPluginState) -> dict[str, Any]:
         "brand_color": plugin.accent_color,
         "required_fields": [],
         "connection_summary": ", ".join(state.mcp_servers),
-        "enabled_tools": ["*"],
-        "tool_names": [],
         "source": "agent-plugin",
     }
 
@@ -902,16 +900,12 @@ def mcp_presets_payload(
         for name, cfg in sorted(config.tools.mcp_servers.items())
         if name not in known
     ]
-    plugin_states = [
-        state
-        for state in discover_agent_plugin_states(config.workspace_path)
-        if state.mcp_servers or state.plugin.install_command
-    ]
     existing_names = {str(row["name"]) for row in (*preset_rows, *custom_rows)}
     plugin_rows = [
-        row
-        for state in plugin_states
-        if (row := _agent_plugin_payload(state))["name"] not in existing_names
+        _agent_plugin_payload(state)
+        for state in discover_agent_plugin_states(config.workspace_path)
+        if (state.mcp_servers or state.plugin.install_command)
+        and f"plugin-{state.plugin.name}" not in existing_names
     ]
     payload: dict[str, Any] = {
         "presets": [*preset_rows, *custom_rows, *plugin_rows],
@@ -1449,16 +1443,13 @@ async def mcp_presets_settings_action(
     if name.startswith("plugin-"):
         plugin_config = load_config(config_path) if config_path is not None else load_config()
         plugin_name = name.removeprefix("plugin-")
-        plugin_state = next(
-            (
-                state
-                for state in discover_agent_plugin_states(plugin_config.workspace_path)
-                if state.plugin.name == plugin_name
-                and (state.mcp_servers or state.plugin.install_command)
-            ),
-            None,
-        )
-        if name not in plugin_config.tools.mcp_servers and plugin_state is not None:
+        plugin_states = discover_agent_plugin_states(plugin_config.workspace_path)
+        plugin_state = next((state for state in plugin_states if state.plugin.name == plugin_name), None)
+        if (
+            name not in plugin_config.tools.mcp_servers
+            and plugin_state is not None
+            and (plugin_state.mcp_servers or plugin_state.plugin.install_command)
+        ):
             if action not in {"enable", "disable"}:
                 raise McpPresetError("Agent Plugins support enable and disable actions only")
             if (

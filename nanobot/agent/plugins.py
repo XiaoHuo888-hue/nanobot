@@ -30,15 +30,6 @@ _MAX_LOGO_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
-class AgentPluginSkill:
-    """One skill supplied by a valid Agent Plugins v1 package."""
-
-    name: str
-    path: Path
-    plugin: str
-
-
-@dataclass(frozen=True)
 class AgentPlugin:
     """A validated, locally installed Agent Plugins v1 package."""
 
@@ -71,14 +62,8 @@ def _discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
     root = _contained_directory(workspace / "plugins", workspace)
     if root is None:
         return []
-    try:
-        candidates = sorted(root.iterdir(), key=lambda path: path.name)
-    except OSError as exc:
-        logger.warning("Could not inspect Agent Plugins directory: {}", exc)
-        return []
-
     plugins: list[AgentPlugin] = []
-    for candidate in candidates:
+    for candidate in _children(root, "Agent Plugins directory"):
         plugin_root = _contained_directory(candidate, root)
         if plugin_root is None:
             continue
@@ -88,13 +73,14 @@ def _discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
     return plugins
 
 
-def enabled_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
+def enabled_agent_plugin_skills(workspace: Path) -> list[tuple[str, Path]]:
     """Return skills from plugins the user has explicitly enabled."""
-    skills: list[AgentPluginSkill] = []
-    for plugin in _discover_agent_plugins(workspace):
-        if _enabled(workspace, plugin.name):
-            skills.extend(_discover_plugin_skills(plugin.name, plugin.root))
-    return skills
+    return [
+        skill
+        for plugin in _discover_agent_plugins(workspace)
+        if _enabled(workspace, plugin.name)
+        for skill in _discover_plugin_skills(plugin.name, plugin.root)
+    ]
 
 
 def _load_manifest(plugin_root: Path) -> AgentPlugin | None:
@@ -172,13 +158,12 @@ def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> Agent
     if plugin is None:
         raise ValueError(f"unknown Agent Plugin '{name}'")
     data = _plugin_data_dir(workspace, plugin.name, create=True)
+    version = plugin.version or "unknown"
     with FileLock(str(data / ".state.lock"), timeout=_SETUP_TIMEOUT_SECONDS + 10):
         if enabled:
-            if plugin.install_command and _setup_version(workspace, plugin.name) != (
-                plugin.version or "unknown"
-            ):
+            if plugin.install_command and _setup_version(workspace, plugin.name) != version:
                 _run_install(plugin, data)
-                _write_state(data / "setup-version", plugin.version or "unknown")
+                _write_state(data / "setup-version", version)
             _write_state(data / "enabled", "1")
         else:
             (data / "enabled").unlink(missing_ok=True)
@@ -209,12 +194,11 @@ def _plugin_logo(value: object, plugin_root: Path) -> Path | None:
     try:
         data = logo.read_bytes() if logo is not None else b""
         suffix = logo.suffix.lower() if logo is not None else ""
-        valid = (
+        if len(data) <= _MAX_LOGO_BYTES and (
             suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")
             or suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff")
             or suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
-        )
-        if valid and len(data) <= _MAX_LOGO_BYTES:
+        ):
             return logo
     except OSError:
         pass
@@ -334,7 +318,7 @@ def _plugin_data_dir(workspace: Path, name: str, *, create: bool) -> Path:
     workspace_id = sha256(str(workspace.expanduser().resolve()).encode()).hexdigest()[:12]
     config_root = get_config_path().expanduser().resolve().parent
     plugin_root = _private_directory(config_root / "plugin-data", config_root, create=create)
-    state_root = _private_directory(plugin_root / workspace_id, config_root, create=create)
+    state_root = _private_directory(plugin_root / workspace_id, plugin_root, create=create)
     data = state_root / name
     return _private_directory(data, state_root, create=True) if create else data
 
@@ -394,44 +378,36 @@ def _run_install(plugin: AgentPlugin, data: Path) -> None:
         raise RuntimeError(output or f"{plugin.display_name} setup failed")
 
 
-def _discover_plugin_skills(plugin_name: str, plugin_root: Path) -> list[AgentPluginSkill]:
+def _discover_plugin_skills(plugin_name: str, plugin_root: Path) -> list[tuple[str, Path]]:
     skills_root = _contained_directory(plugin_root / "skills", plugin_root)
     if skills_root is None:
         return []
 
-    try:
-        candidates = sorted(skills_root.iterdir(), key=lambda path: path.name)
-    except OSError as exc:
-        logger.warning("Could not inspect Agent Plugin '{}' skills: {}", plugin_name, exc)
-        return []
-
-    skills: list[AgentPluginSkill] = []
-    for candidate in candidates:
+    skills: list[tuple[str, Path]] = []
+    for candidate in _children(skills_root, f"Agent Plugin '{plugin_name}' skills"):
         skill_root = _contained_directory(candidate, skills_root)
         if skill_root is None:
             continue
         skill_file = _contained_file(skill_root / "SKILL.md", plugin_root)
-        if skill_file is None or not _valid_skill(skill_file, candidate.name, plugin_name):
+        if skill_file is None:
             continue
-        skills.append(
-            AgentPluginSkill(name=candidate.name, path=skill_file, plugin=plugin_name)
-        )
+        try:
+            metadata = parse_skill_metadata(skill_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            metadata = None
+        if metadata is None or not valid_skill_metadata(metadata, candidate.name):
+            logger.warning("Ignoring Agent Plugin '{}' skill '{}': invalid metadata", plugin_name, candidate.name)
+            continue
+        skills.append((candidate.name, skill_file))
     return skills
 
 
-def _valid_skill(path: Path, directory_name: str, plugin_name: str) -> bool:
+def _children(root: Path, label: str) -> list[Path]:
     try:
-        content = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return False
-    metadata = parse_skill_metadata(content)
-    if metadata is None:
-        logger.warning("Ignoring Agent Plugin '{}' skill '{}': invalid frontmatter", plugin_name, directory_name)
-        return False
-    if not valid_skill_metadata(metadata, directory_name):
-        logger.warning("Ignoring Agent Plugin '{}' skill '{}': invalid metadata", plugin_name, directory_name)
-        return False
-    return True
+        return sorted(root.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        logger.warning("Could not inspect {}: {}", label, exc)
+        return []
 
 
 def _contained_directory(path: Path, root: Path) -> Path | None:

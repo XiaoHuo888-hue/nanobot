@@ -80,7 +80,7 @@ def _write_setup_plugin(workspace: Path) -> tuple[Path, Path]:
 
 
 def _loaded_plugin_skills(workspace: Path) -> list[str]:
-    return [skill.name for skill in enabled_agent_plugin_skills(workspace)]
+    return [name for name, _ in enabled_agent_plugin_skills(workspace)]
 
 
 def test_skills_loader_discovers_agent_plugin_skill(tmp_path: Path) -> None:
@@ -95,7 +95,6 @@ def test_skills_loader_discovers_agent_plugin_skill(tmp_path: Path) -> None:
             "name": "release-notes",
             "path": str(plugin / "skills" / "release-notes" / "SKILL.md"),
             "source": "plugin",
-            "plugin": "acme-tools",
         }
     ]
     assert loader.get_explicitly_invoked_skills("Use $release-notes") == ["release-notes"]

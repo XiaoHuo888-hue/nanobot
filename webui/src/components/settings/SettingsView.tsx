@@ -7701,11 +7701,11 @@ function McpAppsCatalogRow({
   const toolsBusy = actionKey === `tools:${preset.name}`;
   const busy = enableBusy || disableBusy || removeBusy || testBusy || toolsBusy;
   const agentPlugin = preset.source === "agent-plugin";
+  const toggleable = preset.enabled !== undefined;
   const missingFields = preset.required_fields.filter((field) => field.required && !field.configured);
   const hasFields = preset.required_fields.length > 0;
   const needsSetupInput = missingFields.length > 0;
-  const pluginEnabled = agentPlugin && preset.enabled === true;
-  const readyInstalled = agentPlugin ? pluginEnabled : preset.installed && preset.configured;
+  const readyInstalled = preset.enabled ?? (preset.installed && preset.configured);
   const canEnable =
     preset.install_supported &&
     (missingFields.length === 0 || missingFields.every((field) => Boolean(values[field.name]?.trim())));
@@ -7717,8 +7717,8 @@ function McpAppsCatalogRow({
   const detail = agentPlugin && preset.requires
     ? `${description} · ${preset.requires}`
     : description || preset.requires;
-  const statusLabel = agentPlugin
-    ? tx("settings.apps.pluginEnabled", "Plugin enabled")
+  const statusLabel = toggleable
+    ? tx("settings.nanobotFeatures.enabled", "Enabled")
     : mcpPresetStatusLabel(preset.status, tx);
 
   useEffect(() => {
@@ -7754,7 +7754,7 @@ function McpAppsCatalogRow({
             <h3 className="truncate text-[14px] font-semibold leading-5 text-foreground">{preset.display_name}</h3>
             <AppsTypeBadge>
               {agentPlugin
-                ? tx("settings.apps.pluginLabel", "Plugin")
+                ? tx("settings.apps.filterPlugins", "Plugins")
                 : tx("settings.apps.mcpLabel", "Integration")}
             </AppsTypeBadge>
           </div>
@@ -7775,31 +7775,31 @@ function McpAppsCatalogRow({
                   </AppsActionButton>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {!agentPlugin ? (
+                  {!toggleable ? (
                     <DropdownMenuItem disabled={busy} onClick={() => onAction("test", preset.name)}>
                       <PlayCircle aria-hidden />
                       {tx("settings.mcp.test", "Test")}
                     </DropdownMenuItem>
                   ) : null}
-                  {!agentPlugin && toolNames.length ? (
+                  {!toggleable && toolNames.length ? (
                     <DropdownMenuItem disabled={busy} onClick={() => setToolsOpen((open) => !open)}>
                       <SlidersHorizontal aria-hidden />
                       {tx("settings.mcp.toolScope", "Tools")}
                     </DropdownMenuItem>
                   ) : null}
                   <DropdownMenuItem
-                    tone={agentPlugin ? undefined : "destructive"}
+                    tone={toggleable ? undefined : "destructive"}
                     disabled={busy}
-                    onClick={() => onAction(agentPlugin ? "disable" : "remove", preset.name)}
+                    onClick={() => onAction(toggleable ? "disable" : "remove", preset.name)}
                   >
-                    {agentPlugin ? <PauseCircle aria-hidden /> : <Trash2 aria-hidden />}
-                    {agentPlugin
-                      ? tx("settings.apps.pluginDisable", "Disable")
+                    {toggleable ? <PauseCircle aria-hidden /> : <Trash2 aria-hidden />}
+                    {toggleable
+                      ? tx("settings.nanobotFeatures.disable", "Disable")
                       : tx("settings.mcp.remove", "Remove")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              {!agentPlugin ? (
+              {!toggleable ? (
                 <AppsActionButton
                   ariaLabel={tx("settings.mcp.remove", "Remove")}
                   busy={removeBusy}
@@ -7811,9 +7811,9 @@ function McpAppsCatalogRow({
                 </AppsActionButton>
               ) : null}
             </>
-          ) : agentPlugin && preset.installed ? (
+          ) : preset.enabled === false ? (
             <AppsActionButton
-              ariaLabel={tx("settings.apps.pluginEnable", "Enable plugin")}
+              ariaLabel={tx("settings.nanobotFeatures.enable", "Enable")}
               busy={enableBusy}
               onClick={() => onAction("enable", preset.name, values)}
             >
@@ -8023,8 +8023,7 @@ function appsTitle(item: AppsCatalogItem): string {
 
 function appsReady(item: AppsCatalogItem): boolean {
   if (item.kind === "cli") return item.app.installed;
-  if (item.preset.source === "agent-plugin") return item.preset.enabled === true;
-  return item.preset.installed && item.preset.configured;
+  return item.preset.enabled ?? (item.preset.installed && item.preset.configured);
 }
 
 function appsSearchText(item: AppsCatalogItem): string {

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SettingsView } from "@/components/settings/SettingsView";
+import { installedMcpPresetsFromPayload } from "@/lib/mcp-preset-events";
 import { ClientProvider } from "@/providers/ClientProvider";
 import type {
   ChannelSetupContract,
@@ -674,6 +675,7 @@ describe("SettingsView Apps catalog", () => {
       connection_summary: "computer-use",
       source: "agent-plugin",
     };
+    expect(installedMcpPresetsFromPayload({ presets: [plugin], installed_count: 0 })).toEqual([]);
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/settings") return jsonResponse(settingsPayload());
@@ -701,11 +703,11 @@ describe("SettingsView Apps catalog", () => {
     renderSettingsView();
 
     expect(await screen.findByText("Computer Use")).toBeInTheDocument();
-    expect(screen.getByText("Plugin")).toBeInTheDocument();
+    expect(screen.getByText("Plugins")).toBeInTheDocument();
     expect(
       screen.getByText("Control the desktop with a live preview. · screen-recording, accessibility"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Enable plugin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enable" }));
 
     await waitFor(() => {
       expect(requestMutationMock).toHaveBeenCalledWith(
@@ -715,7 +717,7 @@ describe("SettingsView Apps catalog", () => {
       );
     });
     expect(await screen.findByText("Computer Use enabled.")).toBeInTheDocument();
-    const enabledButton = screen.getByRole("button", { name: "Plugin enabled" });
+    const enabledButton = screen.getByRole("button", { name: "Enabled" });
     await waitFor(() => expect(enabledButton).toBeEnabled());
     fireEvent.pointerDown(enabledButton, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Disable" }));
@@ -728,7 +730,7 @@ describe("SettingsView Apps catalog", () => {
       );
     });
     expect(await screen.findByText("Computer Use disabled.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Enable plugin" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enable" })).toBeInTheDocument();
   });
 
   it("keeps runtime dependencies out of Apps and explains chat mentions", async () => {
