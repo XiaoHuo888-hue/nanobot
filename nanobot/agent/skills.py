@@ -99,19 +99,11 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
-        workspace_path = self.workspace_skills / name / "SKILL.md"
-        if workspace_path.exists():
-            return workspace_path.read_text(encoding="utf-8")
-        from nanobot.agent.plugins import enabled_agent_plugin_skills
-
-        for plugin_skill in enabled_agent_plugin_skills(self.workspace):
-            if plugin_skill.name == name and plugin_skill.path.is_file():
-                return plugin_skill.path.read_text(encoding="utf-8")
-        if self.builtin_skills:
-            builtin_path = self.builtin_skills / name / "SKILL.md"
-            if builtin_path.exists():
-                return builtin_path.read_text(encoding="utf-8")
-        return None
+        entry = next(
+            (skill for skill in self.list_skills(filter_unavailable=False) if skill["name"] == name),
+            None,
+        )
+        return Path(entry["path"]).read_text(encoding="utf-8") if entry else None
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
         """

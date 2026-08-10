@@ -57,6 +57,23 @@ def _write_plugin(
     return root
 
 
+def _write_setup_plugin(workspace: Path) -> tuple[Path, Path]:
+    plugin = _write_plugin(
+        workspace,
+        "desktop",
+        manifest={
+            "$schema": AGENT_PLUGIN_SCHEMA,
+            "name": "desktop",
+            "version": "1.2.3",
+            "extensions": {"dev.nanobot": {"installCommand": ["./bin/install"]}},
+        },
+    )
+    executable = plugin / "bin" / "install"
+    executable.parent.mkdir()
+    executable.write_text("setup", encoding="utf-8")
+    return plugin, executable
+
+
 def _loaded_plugin_skills(workspace: Path) -> list[str]:
     return [skill.name for skill in enabled_agent_plugin_skills(workspace)]
 
@@ -117,8 +134,6 @@ def test_agent_plugin_skills_are_direct_children_only(tmp_path: Path) -> None:
     [
         {"$schema": "https://agent-plugins.org/schemas/2.0.0/plugin.schema.json", "name": "demo"},
         {"$schema": AGENT_PLUGIN_SCHEMA, "name": "Bad-Name"},
-        {"$schema": AGENT_PLUGIN_SCHEMA, "name": "demo", "author": None},
-        {"$schema": AGENT_PLUGIN_SCHEMA, "name": "demo", "keywords": None},
     ],
 )
 def test_invalid_agent_plugin_manifest_is_skipped(
@@ -139,6 +154,8 @@ def test_unknown_manifest_fields_and_non_object_extensions_are_ignored(tmp_path:
             "$schema": AGENT_PLUGIN_SCHEMA,
             "name": "demo",
             "futureField": True,
+            "author": None,
+            "keywords": None,
             "extensions": "invalid but non-fatal",
         },
     )
@@ -282,6 +299,7 @@ def test_plugin_mcp_requires_explicit_enable(tmp_path: Path) -> None:
         json.dumps(
             {
                 "$schema": AGENT_PLUGIN_MCP_SCHEMA,
+                "futureField": True,
                 "mcpServers": {
                     "desktop": {
                         "type": "stdio",
@@ -315,19 +333,7 @@ def test_plugin_setup_command_runs_once_per_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NANOBOT_TEST_SECRET", "do-not-inherit")
-    plugin = _write_plugin(
-        tmp_path,
-        "desktop",
-        manifest={
-            "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": "desktop",
-            "version": "1.2.3",
-            "extensions": {"dev.nanobot": {"installCommand": ["./bin/install"]}},
-        },
-    )
-    executable = plugin / "bin" / "install"
-    executable.parent.mkdir()
-    executable.write_text("setup", encoding="utf-8")
+    plugin, executable = _write_setup_plugin(tmp_path)
     calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
 
     def run(command: tuple[str, ...], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -351,19 +357,7 @@ def test_concurrent_plugin_enable_runs_setup_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plugin = _write_plugin(
-        tmp_path,
-        "desktop",
-        manifest={
-            "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": "desktop",
-            "version": "1.2.3",
-            "extensions": {"dev.nanobot": {"installCommand": ["./bin/install"]}},
-        },
-    )
-    executable = plugin / "bin" / "install"
-    executable.parent.mkdir()
-    executable.write_text("setup", encoding="utf-8")
+    _, executable = _write_setup_plugin(tmp_path)
     calls: list[tuple[str, ...]] = []
 
     def run(command: tuple[str, ...], **_: Any) -> subprocess.CompletedProcess[str]:
@@ -428,5 +422,5 @@ def test_plugin_state_symlink_cannot_escape_config_root(
     )
     _write_plugin(tmp_path, "desktop")
 
-    with pytest.raises(RuntimeError, match="escapes the nanobot config directory"):
+    with pytest.raises(RuntimeError, match="escapes its parent"):
         set_agent_plugin_enabled(tmp_path, "desktop", True)

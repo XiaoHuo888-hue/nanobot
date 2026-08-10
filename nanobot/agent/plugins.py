@@ -24,23 +24,7 @@ AGENT_PLUGIN_MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.js
 _PLUGIN_NAME = re.compile(r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 _SKILL_NAME = re.compile(r"^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 _SKILL_FRONTMATTER = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)
-_MANIFEST_FIELDS = {
-    "$schema",
-    "name",
-    "version",
-    "description",
-    "author",
-    "homepage",
-    "repository",
-    "license",
-    "keywords",
-    "extensions",
-}
-_STRING_FIELDS = {"version", "description", "homepage", "repository", "license"}
-_AUTHOR_FIELDS = {"name", "email", "url"}
-_MCP_SERVER_FIELDS = {
-    "stdio": {"type", "command", "args", "env", "cwd"},
-}
+_MCP_SERVER_FIELDS = {"type", "command", "args", "env", "cwd"}
 _SETUP_ENV = {"HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER"}
 _SETUP_TIMEOUT_SECONDS = 600
 _LOGO_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
@@ -146,14 +130,6 @@ def _load_manifest(plugin_root: Path) -> AgentPlugin | None:
     ):
         logger.warning("Ignoring Agent Plugin manifest '{}': invalid name", manifest)
         return None
-    if not _valid_optional_fields(payload):
-        logger.warning("Ignoring Agent Plugin manifest '{}': invalid metadata", manifest)
-        return None
-
-    for field in payload.keys() - _MANIFEST_FIELDS:
-        logger.warning("Ignoring unknown Agent Plugin manifest field '{}' in '{}'", field, manifest)
-    if "extensions" in payload and not isinstance(payload["extensions"], dict):
-        logger.warning("Ignoring non-object Agent Plugin extensions in '{}'", manifest)
     extension = payload.get("extensions")
     extension_payload = cast(dict[str, object], extension) if isinstance(extension, dict) else {}
     nanobot_value = extension_payload.get("dev.nanobot")
@@ -231,26 +207,6 @@ def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> Agent
     return plugin
 
 
-def _valid_optional_fields(payload: dict[str, Any]) -> bool:
-    if any(field in payload and not isinstance(payload[field], str) for field in _STRING_FIELDS):
-        return False
-    keywords = payload.get("keywords")
-    if "keywords" in payload and (
-        not isinstance(keywords, list)
-        or not all(isinstance(keyword, str) for keyword in cast(list[object], keywords))
-    ):
-        return False
-    author = payload.get("author")
-    if "author" not in payload:
-        return True
-    if not isinstance(author, dict):
-        return False
-    author_payload = cast(dict[str, object], author)
-    return not (author_payload.keys() - _AUTHOR_FIELDS) and all(
-        isinstance(value, str) for value in author_payload.values()
-    )
-
-
 def _string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -319,11 +275,7 @@ def _plugin_mcp_servers(workspace: Path, plugin: AgentPlugin) -> dict[str, MCPSe
         return {}
     payload = cast(dict[str, Any], value)
     raw_servers = payload.get("mcpServers")
-    if (
-        payload.keys() != {"$schema", "mcpServers"}
-        or payload.get("$schema") != AGENT_PLUGIN_MCP_SCHEMA
-        or not isinstance(raw_servers, dict)
-    ):
+    if payload.get("$schema") != AGENT_PLUGIN_MCP_SCHEMA or not isinstance(raw_servers, dict):
         logger.warning("Ignoring invalid MCP component for Agent Plugin '{}'", plugin.name)
         return {}
 
@@ -345,46 +297,41 @@ def _plugin_mcp_server(raw: object, root: Path, data: Path) -> MCPServerConfig |
     if not isinstance(raw, dict):
         return None
     payload = cast(dict[str, Any], raw)
-    transport = payload.get("type")
-    allowed = _MCP_SERVER_FIELDS.get(transport) if isinstance(transport, str) else None
-    if allowed is None or payload.keys() - allowed:
+    if payload.get("type") != "stdio" or payload.keys() - _MCP_SERVER_FIELDS:
         return None
-    if transport == "stdio":
-        command = _stdio_command(payload.get("command"), root)
-        args = payload.get("args", [])
-        env = payload.get("env", {})
-        cwd = _stdio_cwd(payload.get("cwd"), root, data)
-        if (
-            command is None
-            or not isinstance(args, list)
-            or not all(isinstance(item, str) for item in cast(list[object], args))
-            or not isinstance(env, dict)
-            or cwd is None
-        ):
-            return None
-        env_payload = cast(dict[object, object], env)
-        if any(
-            not isinstance(key, str)
-            or key in {"PLUGIN_ROOT", "PLUGIN_DATA"}
-            or not isinstance(value, str)
-            for key, value in env_payload.items()
-        ):
-            return None
-        string_env = cast(dict[str, str], env)
-        replacements = {"${PLUGIN_ROOT}": str(root), "${PLUGIN_DATA}": str(data)}
-        return MCPServerConfig(
-            type="stdio",
-            command=command,
-            args=[_expand(item, replacements) for item in cast(list[str], args)],
-            env={
-                **{key: _expand(value, replacements) for key, value in string_env.items()},
-                "PLUGIN_ROOT": str(root),
-                "PLUGIN_DATA": str(data),
-            },
-            cwd=str(cwd),
-        )
-
-    return None
+    command = _stdio_command(payload.get("command"), root)
+    args = payload.get("args", [])
+    env = payload.get("env", {})
+    cwd = _stdio_cwd(payload.get("cwd"), root, data)
+    if (
+        command is None
+        or not isinstance(args, list)
+        or not all(isinstance(item, str) for item in cast(list[object], args))
+        or not isinstance(env, dict)
+        or cwd is None
+    ):
+        return None
+    env_payload = cast(dict[object, object], env)
+    if any(
+        not isinstance(key, str)
+        or key in {"PLUGIN_ROOT", "PLUGIN_DATA"}
+        or not isinstance(value, str)
+        for key, value in env_payload.items()
+    ):
+        return None
+    string_env = cast(dict[str, str], env)
+    replacements = {"${PLUGIN_ROOT}": str(root), "${PLUGIN_DATA}": str(data)}
+    return MCPServerConfig(
+        type="stdio",
+        command=command,
+        args=[_expand(item, replacements) for item in cast(list[str], args)],
+        env={
+            **{key: _expand(value, replacements) for key, value in string_env.items()},
+            "PLUGIN_ROOT": str(root),
+            "PLUGIN_DATA": str(data),
+        },
+        cwd=str(cwd),
+    )
 
 
 def _stdio_command(value: object, root: Path) -> str | None:
@@ -427,36 +374,24 @@ def _expand(value: str, replacements: dict[str, str]) -> str:
 def _plugin_data_dir(workspace: Path, name: str, *, create: bool) -> Path:
     workspace_id = sha256(str(workspace.expanduser().resolve()).encode()).hexdigest()[:12]
     config_root = get_config_path().expanduser().resolve().parent
-    plugin_data_root = config_root / "plugin-data"
+    plugin_root = _private_directory(config_root / "plugin-data", config_root, create=create)
+    state_root = _private_directory(plugin_root / workspace_id, config_root, create=create)
+    data = state_root / name
+    return _private_directory(data, state_root, create=True) if create else data
+
+
+def _private_directory(path: Path, root: Path, *, create: bool) -> Path:
     if create:
-        plugin_data_root.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
     try:
-        resolved_plugin_data = plugin_data_root.resolve(strict=create)
+        resolved = path.resolve(strict=create)
     except OSError as exc:
-        raise RuntimeError("Agent Plugin data root is unavailable") from exc
-    if not resolved_plugin_data.is_relative_to(config_root):
-        raise RuntimeError("Agent Plugin data root escapes the nanobot config directory")
-    state_root = resolved_plugin_data / workspace_id
+        raise RuntimeError("Agent Plugin data directory is unavailable") from exc
+    if not resolved.is_relative_to(root):
+        raise RuntimeError("Agent Plugin data directory escapes its parent")
     if create:
-        resolved_plugin_data.chmod(0o700)
-        state_root.mkdir(parents=True, exist_ok=True)
-    try:
-        resolved_state = state_root.resolve(strict=create)
-    except OSError as exc:
-        raise RuntimeError("Agent Plugin state directory is unavailable") from exc
-    if not resolved_state.is_relative_to(config_root):
-        raise RuntimeError("Agent Plugin state directory escapes the nanobot config directory")
-    if create:
-        resolved_state.chmod(0o700)
-    data = resolved_state / name
-    if create:
-        data.mkdir(exist_ok=True)
-        resolved_data = data.resolve(strict=True)
-        if not resolved_data.is_relative_to(resolved_state):
-            raise RuntimeError("Agent Plugin data directory escapes its state directory")
-        resolved_data.chmod(0o700)
-        return resolved_data
-    return data
+        resolved.chmod(0o700)
+    return resolved
 
 
 def _enabled(workspace: Path, name: str) -> bool:
