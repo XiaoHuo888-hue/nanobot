@@ -17,7 +17,46 @@ _STRIP_SKILL_FRONTMATTER = re.compile(
     r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?",
     re.DOTALL,
 )
+_SKILL_NAME = re.compile(r"^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+_SKILL_NAME_LINE = re.compile(r"^name\s*:.*$", re.MULTILINE)
 _SKILL_REFERENCE = re.compile(r"(?<![\w$])\$([A-Za-z0-9_-]+)")
+
+
+def parse_skill_metadata(content: str) -> dict[str, object] | None:
+    """Parse a skill document's YAML frontmatter."""
+    if not (match := _STRIP_SKILL_FRONTMATTER.match(content)):
+        return None
+    try:
+        parsed = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(key): value for key, value in cast(dict[object, object], parsed).items()}
+
+
+def valid_skill_metadata(metadata: dict[str, object], name: str) -> bool:
+    """Return whether metadata satisfies the Agent Skills identity contract."""
+    description = metadata.get("description")
+    return (
+        metadata.get("name") == name
+        and len(name) <= 64
+        and _SKILL_NAME.fullmatch(name) is not None
+        and isinstance(description, str)
+        and 1 <= len(description.strip()) <= 1024
+    )
+
+
+def normalize_skill_document(content: str, name: str) -> str | None:
+    """Return a valid skill document with a canonical name."""
+    match = _STRIP_SKILL_FRONTMATTER.match(content)
+    metadata = parse_skill_metadata(content)
+    if match is None or metadata is None or not valid_skill_metadata(metadata | {"name": name}, name):
+        return None
+    frontmatter, replaced = _SKILL_NAME_LINE.subn(f"name: {name}", match.group(1), count=1)
+    if not replaced:
+        frontmatter = f"name: {name}\n{frontmatter}"
+    return f"---\n{frontmatter.strip()}\n---\n\n{content[match.end():].lstrip()}"
 
 
 class SkillsLoader:
@@ -291,21 +330,4 @@ class SkillsLoader:
         Returns:
             Metadata dict or None.
         """
-        content = self.load_skill(name)
-        if not content or not content.startswith("---"):
-            return None
-        match = _STRIP_SKILL_FRONTMATTER.match(content)
-        if not match:
-            return None
-        try:
-            parsed = yaml.safe_load(match.group(1))
-        except yaml.YAMLError:
-            return None
-        if not isinstance(parsed, dict):
-            return None
-        # yaml.safe_load returns native types (int, bool, list, etc.);
-        # keep values as-is so downstream consumers get correct types.
-        metadata: dict[str, object] = {}
-        for key, value in cast(dict[object, object], parsed).items():
-            metadata[str(key)] = value
-        return metadata
+        return parse_skill_metadata(self.load_skill(name) or "")

@@ -2308,10 +2308,9 @@ Disabled skills are excluded from the main agent's skill summary, from always-on
 
 ### Agent Plugins v1
 
-nanobot also loads locally installed [Agent Plugins](https://agent-plugins.org/) from
-`<workspace>/plugins/<plugin>/`. Package presence in this directory is the installation state;
-enabling it is a separate trust decision. A supported package has a root `plugin.json` that
-targets Agent Plugins v1 and may provide skills, MCP servers, or both:
+nanobot discovers [Agent Plugins](https://agent-plugins.org/) in
+`<workspace>/plugins/<plugin>/`. A v1 package has `plugin.json` and may provide skills, MCP
+servers, or both:
 
 ```text
 plugins/
@@ -2323,38 +2322,20 @@ plugins/
             └── SKILL.md
 ```
 
-Plugin skills use the same progressive loading and `$skill-name` invocation as workspace
-skills after the plugin is explicitly enabled. Disabling a plugin removes both its skills and
-MCP servers from the agent. A workspace skill wins when it has the same name as an enabled
-plugin skill; plugin skills win over built-in skills. Invalid manifests, invalid Agent Skills,
-nested skill directories, and paths that resolve outside the plugin root are ignored.
+Directory presence means installed; activation is an explicit trust decision in **Apps**.
+Enabled skills use normal progressive loading and `$skill-name` invocation. Workspace skills
+override plugin skills, which override built-ins. Enabled `stdio` servers from `mcp.json` receive
+contained `PLUGIN_ROOT` and isolated `PLUGIN_DATA` paths; explicit `tools.mcpServers` entries win
+name collisions. Invalid manifests, components, nested skills, and escaping paths are ignored.
 
-Portable MCP servers declared in `mcp.json` appear in **Apps**, but are never started merely
-because a package exists. Enabling a plugin there is the explicit trust decision that activates
-its executable components. The host expands `PLUGIN_ROOT` and an isolated `PLUGIN_DATA`, checks
-package paths before launch, and hot-reloads MCP connections. Explicit `tools.mcpServers`
-configuration wins over a plugin server if their host names collide. The v1 host currently
-supports plugin `stdio` servers; unsupported remote transports are skipped independently.
+Enabled plugins run as the nanobot user; declared permissions are descriptive, not an OS sandbox.
+The optional `extensions.dev.nanobot.installCommand` is a shell-free argv run once per version
+before local enable. Remote setup requires `tools.webuiAllowRemotePackageInstall`. The optional
+`extensions.dev.nanobot.logo` accepts a contained PNG, JPEG, or WebP up to 256 KiB.
 
-Treat enabled plugins as local code running with the nanobot user's privileges. Manifest
-permissions are descriptive; nanobot does not currently enforce them with an OS sandbox.
-
-Plugins may optionally declare a shell-free `extensions.dev.nanobot.installCommand` array. The
-local WebUI runs it once per plugin version before first enable; remote WebUI clients cannot run
-plugin setup unless remote package installation was explicitly allowed. Enabling an already set
-up package does not install it and is allowed remotely. Agent Plugins v1 deliberately leaves
-distribution and installation UX to each host. A future catalog can therefore acquire, verify,
-and place a package atomically before handing it to this same runtime; users should still see one
-Install action, not separate download and installation steps.
-
-The optional `extensions.dev.nanobot.logo` field points to a packaged PNG, JPEG, or WebP asset
-such as `./assets/icon.png`. nanobot only reads contained raster files up to 256 KiB and embeds
-them locally in the Apps catalog; invalid or missing assets fall back to the plugin initials.
-
-CLI Apps installed from the WebUI use the same package layout. nanobot installs the CLI through
-its catalog adapter, then writes and enables a skills-only Agent Plugin under
-`<workspace>/plugins/`; updates refresh that package and uninstall removes it. The external
-executable remains managed by the CLI Apps installer rather than by the Agent Plugins manifest.
+WebUI-installed CLI Apps use the same package layout as skills-only plugins. Their external
+executables remain managed by the CLI Apps installer; update refreshes the package and uninstall
+removes it. Future catalogs can acquire and place packages before using this same activation path.
 
 ## Tool Hint Max Length
 

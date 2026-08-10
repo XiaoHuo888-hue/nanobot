@@ -515,14 +515,7 @@ def test_install_records_available_cli_without_reinstalling(
     assert "entry_point_available" in payload["last_action"]["verification"]
     installed = json.loads(manager.installed_path.read_text(encoding="utf-8"))["apps"]
     assert installed["feishu"]["entry_point_path"] == str(resolved)
-    skill = (
-        manager.workspace
-        / "plugins"
-        / "cli-app-feishu"
-        / "skills"
-        / "cli-app-feishu"
-        / "SKILL.md"
-    )
+    skill = manager.workspace / "plugins/cli-app-feishu/skills/cli-app-feishu/SKILL.md"
     assert skill.is_file()
     assert 'run_cli_app` tool with `name="feishu"' in skill.read_text(encoding="utf-8")
 

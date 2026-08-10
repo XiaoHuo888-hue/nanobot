@@ -57,13 +57,6 @@ _MAX_TEST_TOOLS = 16
 _DEFAULT_TEST_TIMEOUT = 20
 _DEFAULT_CUSTOM_TIMEOUT = 30
 _CUSTOM_ACTIONS = {"custom", "import", "import-cursor", "tools"}
-_PLUGIN_LOGO_MIME_TYPES = {
-    ".jpeg": "image/jpeg",
-    ".jpg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-}
-
 McpReload = Callable[[], Awaitable[dict[str, Any]]]
 
 
@@ -859,16 +852,9 @@ def _plugin_logo_data_url(path: Path | None) -> str | None:
         data = path.read_bytes()
     except OSError:
         return None
-    suffix = path.suffix.lower()
-    valid = (
-        suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")
-        or suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff")
-        or suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
-    )
-    if not valid:
-        return None
     encoded = base64.b64encode(data).decode("ascii")
-    return f"data:{_PLUGIN_LOGO_MIME_TYPES[suffix]};base64,{encoded}"
+    image_format = path.suffix.lower().lstrip(".").replace("jpg", "jpeg")
+    return f"data:image/{image_format};base64,{encoded}"
 
 
 def _agent_plugin_payload(state: AgentPluginState) -> dict[str, Any]:

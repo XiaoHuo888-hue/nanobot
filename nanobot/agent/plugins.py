@@ -9,12 +9,13 @@ import subprocess
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
-import yaml
 from filelock import FileLock
 from loguru import logger
+from pydantic import ValidationError
 
+from nanobot.agent.skills import parse_skill_metadata, valid_skill_metadata
 from nanobot.config.loader import get_config_path
 from nanobot.config.schema import MCPServerConfig
 
@@ -22,12 +23,9 @@ AGENT_PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.jso
 AGENT_PLUGIN_MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
 
 _PLUGIN_NAME = re.compile(r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
-_SKILL_NAME = re.compile(r"^(?!.*--)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-_SKILL_FRONTMATTER = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)
 _MCP_SERVER_FIELDS = {"type", "command", "args", "env", "cwd"}
 _SETUP_ENV = {"HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER"}
 _SETUP_TIMEOUT_SECONDS = 600
-_LOGO_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 _MAX_LOGO_BYTES = 256 * 1024
 
 
@@ -70,18 +68,11 @@ class AgentPluginState:
 def _discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
     """Return installed packages found under ``<workspace>/plugins/*``."""
     workspace = workspace.expanduser().resolve()
-    plugins_root = workspace / "plugins"
-    if not plugins_root.is_dir():
+    root = _contained_directory(workspace / "plugins", workspace)
+    if root is None:
         return []
     try:
-        root = plugins_root.resolve(strict=True)
-    except OSError:
-        return []
-    if not root.is_relative_to(workspace):
-        logger.warning("Ignoring Agent Plugins directory outside the workspace")
-        return []
-    try:
-        candidates = sorted(plugins_root.iterdir(), key=lambda path: path.name)
+        candidates = sorted(root.iterdir(), key=lambda path: path.name)
     except OSError as exc:
         logger.warning("Could not inspect Agent Plugins directory: {}", exc)
         return []
@@ -107,19 +98,9 @@ def enabled_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
 
 
 def _load_manifest(plugin_root: Path) -> AgentPlugin | None:
-    manifest = _contained_file(plugin_root / "plugin.json", plugin_root)
-    if manifest is None:
+    payload = _read_object(plugin_root / "plugin.json", plugin_root)
+    if payload is None:
         return None
-    try:
-        value = cast(object, json.loads(manifest.read_text(encoding="utf-8")))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        logger.warning("Ignoring invalid Agent Plugin manifest '{}': {}", manifest, exc)
-        return None
-    if not isinstance(value, dict):
-        logger.warning("Ignoring Agent Plugin manifest '{}': expected a JSON object", manifest)
-        return None
-
-    payload = cast(dict[str, Any], value)
     if payload.get("$schema") != AGENT_PLUGIN_SCHEMA:
         return None
     name = payload.get("name")
@@ -128,7 +109,7 @@ def _load_manifest(plugin_root: Path) -> AgentPlugin | None:
         or len(name) > 64
         or _PLUGIN_NAME.fullmatch(name) is None
     ):
-        logger.warning("Ignoring Agent Plugin manifest '{}': invalid name", manifest)
+        logger.warning("Ignoring Agent Plugin manifest in '{}': invalid name", plugin_root)
         return None
     extension = payload.get("extensions")
     extension_payload = cast(dict[str, object], extension) if isinstance(extension, dict) else {}
@@ -165,27 +146,24 @@ def agent_plugin_mcp_servers(
         for name, server in plugin_servers.items():
             host_name = plugin.name if len(plugin_servers) == 1 else f"{plugin.name}-{name}"
             servers[host_name] = server
-    for name, server in (configured or {}).items():
-        if name in servers:
-            logger.warning("Configured MCP server '{}' overrides an Agent Plugin server", name)
-        servers[name] = server
-    return servers
+    configured = configured or {}
+    if collisions := servers.keys() & configured.keys():
+        logger.warning("Configured MCP servers override Agent Plugins: {}", ", ".join(sorted(collisions)))
+    return servers | configured
 
 
 def discover_agent_plugin_states(workspace: Path) -> list[AgentPluginState]:
     """Return component and lifecycle state for discovered plugins."""
-    states: list[AgentPluginState] = []
-    for plugin in _discover_agent_plugins(workspace):
-        states.append(
-            AgentPluginState(
-                plugin=plugin,
-                mcp_servers=tuple(sorted(_plugin_mcp_servers(workspace, plugin))),
-                enabled=_enabled(workspace, plugin.name),
-                setup_required=bool(plugin.install_command)
-                and _setup_version(workspace, plugin.name) != (plugin.version or "unknown"),
-            )
+    return [
+        AgentPluginState(
+            plugin=plugin,
+            mcp_servers=tuple(sorted(_plugin_mcp_servers(workspace, plugin))),
+            enabled=_enabled(workspace, plugin.name),
+            setup_required=bool(plugin.install_command)
+            and _setup_version(workspace, plugin.name) != (plugin.version or "unknown"),
         )
-    return states
+        for plugin in _discover_agent_plugins(workspace)
+    ]
 
 
 def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> AgentPlugin:
@@ -212,9 +190,7 @@ def _string(value: object) -> str:
 
 
 def _string_tuple(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        return ()
-    items = cast(list[object], value)
+    items = cast(list[object], value) if isinstance(value, list) else []
     return tuple(item.strip() for item in items if isinstance(item, str) and item.strip())
 
 
@@ -230,16 +206,20 @@ def _plugin_logo(value: object, plugin_root: Path) -> Path | None:
         logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
         return None
     logo = _contained_file(plugin_root / value[2:], plugin_root)
-    if logo is None or logo.suffix.lower() not in _LOGO_SUFFIXES:
-        logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
-        return None
     try:
-        if logo.stat().st_size > _MAX_LOGO_BYTES:
-            logger.warning("Ignoring oversized Agent Plugin logo in '{}'", plugin_root)
-            return None
+        data = logo.read_bytes() if logo is not None else b""
+        suffix = logo.suffix.lower() if logo is not None else ""
+        valid = (
+            suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")
+            or suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff")
+            or suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+        )
+        if valid and len(data) <= _MAX_LOGO_BYTES:
+            return logo
     except OSError:
-        return None
-    return logo
+        pass
+    logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
+    return None
 
 
 def _install_command(value: object, plugin_root: Path) -> tuple[str, ...]:
@@ -263,17 +243,9 @@ def _install_command(value: object, plugin_root: Path) -> tuple[str, ...]:
 
 
 def _plugin_mcp_servers(workspace: Path, plugin: AgentPlugin) -> dict[str, MCPServerConfig]:
-    path = _contained_file(plugin.root / "mcp.json", plugin.root)
-    if path is None:
+    payload = _read_object(plugin.root / "mcp.json", plugin.root)
+    if payload is None:
         return {}
-    try:
-        value = cast(object, json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        logger.warning("Ignoring invalid MCP component for Agent Plugin '{}': {}", plugin.name, exc)
-        return {}
-    if not isinstance(value, dict):
-        return {}
-    payload = cast(dict[str, Any], value)
     raw_servers = payload.get("mcpServers")
     if payload.get("$schema") != AGENT_PLUGIN_MCP_SCHEMA or not isinstance(raw_servers, dict):
         logger.warning("Ignoring invalid MCP component for Agent Plugin '{}'", plugin.name)
@@ -296,41 +268,30 @@ def _plugin_mcp_servers(workspace: Path, plugin: AgentPlugin) -> dict[str, MCPSe
 def _plugin_mcp_server(raw: object, root: Path, data: Path) -> MCPServerConfig | None:
     if not isinstance(raw, dict):
         return None
-    payload = cast(dict[str, Any], raw)
-    if payload.get("type") != "stdio" or payload.keys() - _MCP_SERVER_FIELDS:
+    payload = cast(dict[str, object], raw)
+    if payload.keys() - _MCP_SERVER_FIELDS:
         return None
-    command = _stdio_command(payload.get("command"), root)
-    args = payload.get("args", [])
-    env = payload.get("env", {})
+    try:
+        server = MCPServerConfig.model_validate(payload)
+    except ValidationError:
+        return None
+    command = _stdio_command(server.command, root)
     cwd = _stdio_cwd(payload.get("cwd"), root, data)
-    if (
-        command is None
-        or not isinstance(args, list)
-        or not all(isinstance(item, str) for item in cast(list[object], args))
-        or not isinstance(env, dict)
-        or cwd is None
-    ):
+    if server.type != "stdio" or command is None or cwd is None:
         return None
-    env_payload = cast(dict[object, object], env)
-    if any(
-        not isinstance(key, str)
-        or key in {"PLUGIN_ROOT", "PLUGIN_DATA"}
-        or not isinstance(value, str)
-        for key, value in env_payload.items()
-    ):
+    if {"PLUGIN_ROOT", "PLUGIN_DATA"} & server.env.keys():
         return None
-    string_env = cast(dict[str, str], env)
-    replacements = {"${PLUGIN_ROOT}": str(root), "${PLUGIN_DATA}": str(data)}
-    return MCPServerConfig(
-        type="stdio",
-        command=command,
-        args=[_expand(item, replacements) for item in cast(list[str], args)],
-        env={
-            **{key: _expand(value, replacements) for key, value in string_env.items()},
-            "PLUGIN_ROOT": str(root),
-            "PLUGIN_DATA": str(data),
-        },
-        cwd=str(cwd),
+    return server.model_copy(
+        update={
+            "command": command,
+            "args": [_expand(item, root, data) for item in server.args],
+            "env": {
+                **{key: _expand(value, root, data) for key, value in server.env.items()},
+                "PLUGIN_ROOT": str(root),
+                "PLUGIN_DATA": str(data),
+            },
+            "cwd": str(cwd),
+        }
     )
 
 
@@ -365,10 +326,8 @@ def _stdio_cwd(value: object, root: Path, data: Path) -> Path | None:
     return None
 
 
-def _expand(value: str, replacements: dict[str, str]) -> str:
-    for token, replacement in replacements.items():
-        value = value.replace(token, replacement)
-    return value
+def _expand(value: str, root: Path, data: Path) -> str:
+    return value.replace("${PLUGIN_ROOT}", str(root)).replace("${PLUGIN_DATA}", str(data))
 
 
 def _plugin_data_dir(workspace: Path, name: str, *, create: bool) -> Path:
@@ -408,12 +367,7 @@ def _setup_version(workspace: Path, name: str) -> str:
 
 
 def _write_state(path: Path, value: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(value, encoding="utf-8")
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    path.write_text(value, encoding="utf-8")
     path.chmod(0o600)
 
 
@@ -441,12 +395,8 @@ def _run_install(plugin: AgentPlugin, data: Path) -> None:
 
 
 def _discover_plugin_skills(plugin_name: str, plugin_root: Path) -> list[AgentPluginSkill]:
-    skills_root = plugin_root / "skills"
-    if not skills_root.exists():
-        return []
-    resolved_skills_root = _contained_directory(skills_root, plugin_root)
-    if resolved_skills_root is None:
-        logger.warning("Ignoring invalid skills component in Agent Plugin '{}'", plugin_name)
+    skills_root = _contained_directory(plugin_root / "skills", plugin_root)
+    if skills_root is None:
         return []
 
     try:
@@ -457,7 +407,7 @@ def _discover_plugin_skills(plugin_name: str, plugin_root: Path) -> list[AgentPl
 
     skills: list[AgentPluginSkill] = []
     for candidate in candidates:
-        skill_root = _contained_directory(candidate, resolved_skills_root)
+        skill_root = _contained_directory(candidate, skills_root)
         if skill_root is None:
             continue
         skill_file = _contained_file(skill_root / "SKILL.md", plugin_root)
@@ -474,31 +424,14 @@ def _valid_skill(path: Path, directory_name: str, plugin_name: str) -> bool:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return False
-    match = _SKILL_FRONTMATTER.match(content)
-    if match is None:
+    metadata = parse_skill_metadata(content)
+    if metadata is None:
         logger.warning("Ignoring Agent Plugin '{}' skill '{}': invalid frontmatter", plugin_name, directory_name)
         return False
-    try:
-        metadata = cast(object, yaml.safe_load(match.group(1)))
-    except yaml.YAMLError:
-        metadata = None
-    if not isinstance(metadata, dict):
-        logger.warning("Ignoring Agent Plugin '{}' skill '{}': invalid frontmatter", plugin_name, directory_name)
-        return False
-    payload = cast(dict[object, object], metadata)
-    name = payload.get("name")
-    description = payload.get("description")
-    valid = (
-        name == directory_name
-        and isinstance(name, str)
-        and len(name) <= 64
-        and _SKILL_NAME.fullmatch(name) is not None
-        and isinstance(description, str)
-        and 1 <= len(description.strip()) <= 1024
-    )
-    if not valid:
+    if not valid_skill_metadata(metadata, directory_name):
         logger.warning("Ignoring Agent Plugin '{}' skill '{}': invalid metadata", plugin_name, directory_name)
-    return valid
+        return False
+    return True
 
 
 def _contained_directory(path: Path, root: Path) -> Path | None:
@@ -507,6 +440,18 @@ def _contained_directory(path: Path, root: Path) -> Path | None:
     except OSError:
         return None
     return resolved if resolved.is_dir() and resolved.is_relative_to(root) else None
+
+
+def _read_object(path: Path, root: Path) -> dict[str, object] | None:
+    contained = _contained_file(path, root)
+    if contained is None:
+        return None
+    try:
+        value = cast(object, json.loads(contained.read_text(encoding="utf-8")))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring invalid Agent Plugin component '{}': {}", contained, exc)
+        return None
+    return cast(dict[str, object], value) if isinstance(value, dict) else None
 
 
 def _contained_file(path: Path, root: Path) -> Path | None:

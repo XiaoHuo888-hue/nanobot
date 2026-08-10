@@ -18,9 +18,9 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
-import yaml
 from loguru import logger
 
+from nanobot.agent.skills import normalize_skill_document
 from nanobot.apps.protocol import app_manifest, compact_dict
 from nanobot.config.paths import get_runtime_subdir
 from nanobot.security.workspace_policy import is_path_within
@@ -43,8 +43,6 @@ _MAX_ARTIFACT_REPORT = 12
 _SAFE_NAME_RE = re.compile(r"[^a-z0-9_-]+")
 _SAFE_NPM_DIR_RE = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 _MENTION_RE = re.compile(r"(^|[\s([{])@([a-z0-9_-]+)\b", re.IGNORECASE)
-_SKILL_FRONTMATTER_RE = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)
-_SKILL_NAME_LINE_RE = re.compile(r"^name\s*:.*$", re.MULTILINE)
 _SHELL_META_CHARS = ("|", "&&", "||", ";", "$(", "`", ">", "<")
 _ENDORSEMENT_WORD_RE = re.compile(r"\bofficial\s+", re.IGNORECASE)
 _ARTIFACT_EXTENSIONS = frozenset({
@@ -232,11 +230,11 @@ def _plugin_skill_relative_path(name: str) -> str:
 
 def cli_app_skill_relative_path(workspace: Path, name: str) -> str:
     """Return a CLI App's skill path, including the legacy location."""
-    canonical = Path(_plugin_skill_relative_path(name))
-    legacy = Path("skills") / _legacy_skill_name(name) / "SKILL.md"
+    canonical = _plugin_skill_relative_path(name)
+    legacy = f"skills/{_legacy_skill_name(name)}/SKILL.md"
     if not (workspace / canonical).is_file() and (workspace / legacy).is_file():
-        return legacy.as_posix()
-    return canonical.as_posix()
+        return legacy
+    return canonical
 
 
 def _has_shell_meta(command: str) -> bool:
@@ -1093,31 +1091,12 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
                     return "".join(lines[: index + 1]) + "\n" + note + "\n" + "".join(lines[index + 1 :])
         return note + "\n" + content
 
-    def _normalise_skill(self, content: str, app: dict[str, Any]) -> str:
-        """Give a catalog skill the identity required by its plugin directory."""
-        match = _SKILL_FRONTMATTER_RE.match(content)
-        if match is None:
-            return self._fallback_skill(app)
-        try:
-            metadata = _as_object_dict(cast(object, yaml.safe_load(match.group(1))))
-        except yaml.YAMLError:
-            return self._fallback_skill(app)
-        description = metadata.get("description") if metadata is not None else None
-        if not isinstance(description, str) or not 1 <= len(description.strip()) <= 1024:
-            return self._fallback_skill(app)
-
-        name = _safe_skill_name(str(app["name"]))
-        frontmatter, replaced = _SKILL_NAME_LINE_RE.subn(f"name: {name}", match.group(1), count=1)
-        if not replaced:
-            frontmatter = f"name: {name}\n{frontmatter}"
-        body = content[match.end():].lstrip()
-        return f"---\n{frontmatter.strip()}\n---\n\n{body}"
-
     def install_skill(self, app: dict[str, Any]) -> Path:
-        path = self.workspace / _plugin_skill_relative_path(str(app["name"]))
+        name = str(app["name"])
+        path = self.workspace / _plugin_skill_relative_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         content = self._fetch_skill_content(app) or self._fallback_skill(app)
-        content = self._normalise_skill(content, app)
+        content = normalize_skill_document(content, _safe_skill_name(name)) or self._fallback_skill(app)
         content = self._with_nanobot_skill_note(content, app)
         path.write_text(content, encoding="utf-8")
         plugin_root = path.parents[2]

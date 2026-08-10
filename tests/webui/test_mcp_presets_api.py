@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -132,36 +133,22 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
     async def reload() -> dict[str, object]:
         return {"ok": True, "message": "MCP reloaded.", "requires_restart": False}
 
+    plugin_action = partial(
+        mcp_presets_settings_action,
+        query={"name": ["plugin-desktop"]},
+    )
     with pytest.raises(McpPresetError, match="restricted") as restricted:
-        asyncio.run(
-            mcp_presets_settings_action(
-                "enable",
-                {"name": ["plugin-desktop"]},
-                remote=True,
-            )
-        )
+        asyncio.run(plugin_action("enable", remote=True))
     assert restricted.value.status == 403
 
-    enabled = asyncio.run(
-        mcp_presets_settings_action(
-            "enable",
-            {"name": ["plugin-desktop"]},
-            reload_mcp=reload,
-        )
-    )
+    enabled = asyncio.run(plugin_action("enable", reload_mcp=reload))
     enabled_row = next(item for item in enabled["presets"] if item["name"] == "plugin-desktop")
     assert enabled_row["configured"] is True
     assert enabled_row["enabled"] is True
     assert enabled_row["status"] == "enabled"
     assert enabled["requires_restart"] is False
 
-    disabled = asyncio.run(
-        mcp_presets_settings_action(
-            "disable",
-            {"name": ["plugin-desktop"]},
-            reload_mcp=reload,
-        )
-    )
+    disabled = asyncio.run(plugin_action("disable", reload_mcp=reload))
     disabled_row = next(item for item in disabled["presets"] if item["name"] == "plugin-desktop")
     assert disabled_row["installed"] is True
     assert disabled_row["configured"] is True
@@ -169,12 +156,7 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
     assert disabled_row["status"] == "disabled"
 
     with pytest.raises(McpPresetError, match="enable and disable"):
-        asyncio.run(
-            mcp_presets_settings_action(
-                "remove",
-                {"name": ["plugin-desktop"]},
-            )
-        )
+        asyncio.run(plugin_action("remove"))
 
 
 def test_explicit_mcp_config_wins_over_plugin_catalog_name(

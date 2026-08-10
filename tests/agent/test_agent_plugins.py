@@ -40,6 +40,10 @@ def _write_skill(root: Path, name: str, *, description: str = "Plugin skill.") -
     return skill
 
 
+def _manifest(name: str, **fields: object) -> dict[str, object]:
+    return {"$schema": AGENT_PLUGIN_SCHEMA, "name": name, **fields}
+
+
 def _write_plugin(
     workspace: Path,
     directory: str,
@@ -49,24 +53,25 @@ def _write_plugin(
 ) -> Path:
     root = workspace / "plugins" / directory
     root.mkdir(parents=True)
-    payload = manifest or {
-        "$schema": AGENT_PLUGIN_SCHEMA,
-        "name": name or directory,
-    }
+    payload = manifest or _manifest(name or directory)
     (root / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
     return root
+
+
+def _write_mcp(root: Path, servers: dict[str, object], **fields: object) -> None:
+    payload = {"$schema": AGENT_PLUGIN_MCP_SCHEMA, "mcpServers": servers, **fields}
+    (root / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _write_setup_plugin(workspace: Path) -> tuple[Path, Path]:
     plugin = _write_plugin(
         workspace,
         "desktop",
-        manifest={
-            "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": "desktop",
-            "version": "1.2.3",
-            "extensions": {"dev.nanobot": {"installCommand": ["./bin/install"]}},
-        },
+        manifest=_manifest(
+            "desktop",
+            version="1.2.3",
+            extensions={"dev.nanobot": {"installCommand": ["./bin/install"]}},
+        ),
     )
     executable = plugin / "bin" / "install"
     executable.parent.mkdir()
@@ -150,14 +155,13 @@ def test_unknown_manifest_fields_and_non_object_extensions_are_ignored(tmp_path:
     plugin = _write_plugin(
         tmp_path,
         "demo",
-        manifest={
-            "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": "demo",
-            "futureField": True,
-            "author": None,
-            "keywords": None,
-            "extensions": "invalid but non-fatal",
-        },
+        manifest=_manifest(
+            "demo",
+            futureField=True,
+            author=None,
+            keywords=None,
+            extensions="invalid but non-fatal",
+        ),
     )
     _write_skill(plugin, "example")
     set_agent_plugin_enabled(tmp_path, "demo", True)
@@ -169,11 +173,10 @@ def test_agent_plugin_discovers_contained_raster_logo(tmp_path: Path) -> None:
     plugin = _write_plugin(
         tmp_path,
         "demo",
-        manifest={
-            "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": "demo",
-            "extensions": {"dev.nanobot": {"logo": "./assets/icon.png"}},
-        },
+        manifest=_manifest(
+            "demo",
+            extensions={"dev.nanobot": {"logo": "./assets/icon.png"}},
+        ),
     )
     assets = plugin / "assets"
     assets.mkdir()
@@ -187,11 +190,10 @@ def test_agent_plugin_logo_cannot_escape_package(tmp_path: Path) -> None:
     plugin = _write_plugin(
         tmp_path,
         "demo",
-        manifest={
-            "$schema": AGENT_PLUGIN_SCHEMA,
-            "name": "demo",
-            "extensions": {"dev.nanobot": {"logo": "./assets/icon.png"}},
-        },
+        manifest=_manifest(
+            "demo",
+            extensions={"dev.nanobot": {"logo": "./assets/icon.png"}},
+        ),
     )
     assets = plugin / "assets"
     assets.mkdir()
@@ -295,22 +297,17 @@ def test_plugin_mcp_requires_explicit_enable(tmp_path: Path) -> None:
     executable = plugin / "bin" / "server"
     executable.parent.mkdir()
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    (plugin / "mcp.json").write_text(
-        json.dumps(
-            {
-                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
-                "futureField": True,
-                "mcpServers": {
-                    "desktop": {
-                        "type": "stdio",
-                        "command": "./bin/server",
-                        "args": ["--data", "${PLUGIN_DATA}/state"],
-                        "cwd": "${PLUGIN_ROOT}",
-                    }
-                },
+    _write_mcp(
+        plugin,
+        {
+            "desktop": {
+                "type": "stdio",
+                "command": "./bin/server",
+                "args": ["--data", "${PLUGIN_DATA}/state"],
+                "cwd": "${PLUGIN_ROOT}",
             }
-        ),
-        encoding="utf-8",
+        },
+        futureField=True,
     )
 
     assert agent_plugin_mcp_servers(tmp_path) == {}
@@ -385,18 +382,13 @@ def test_invalid_plugin_mcp_entries_do_not_block_valid_servers(tmp_path: Path) -
     executable = plugin / "bin" / "server"
     executable.parent.mkdir()
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    (plugin / "mcp.json").write_text(
-        json.dumps(
-            {
-                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
-                "mcpServers": {
-                    "public-http": {"type": "streamable-http", "url": "http://example.com/mcp"},
-                    "local": {"type": "stdio", "command": "./bin/server"},
-                    "escape": {"type": "stdio", "command": "../outside"},
-                },
-            }
-        ),
-        encoding="utf-8",
+    _write_mcp(
+        plugin,
+        {
+            "public-http": {"type": "streamable-http", "url": "http://example.com/mcp"},
+            "local": {"type": "stdio", "command": "./bin/server"},
+            "escape": {"type": "stdio", "command": "../outside"},
+        },
     )
     set_agent_plugin_enabled(tmp_path, "network", True)
 
