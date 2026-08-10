@@ -2323,9 +2323,10 @@ plugins/
 ```
 
 Plugin skills use the same progressive loading and `$skill-name` invocation as workspace
-skills. A workspace skill wins when it has the same name as a plugin skill; plugin skills win
-over built-in skills. Invalid manifests, invalid Agent Skills, nested skill directories, and
-paths that resolve outside the plugin root are ignored.
+skills after the plugin is explicitly enabled. Disabling a plugin removes both its skills and
+MCP servers from the agent. A workspace skill wins when it has the same name as an enabled
+plugin skill; plugin skills win over built-in skills. Invalid manifests, invalid Agent Skills,
+nested skill directories, and paths that resolve outside the plugin root are ignored.
 
 Portable MCP servers declared in `mcp.json` appear in **Apps**, but are never started merely
 because a package exists. Enabling a plugin there is the explicit trust decision that activates
@@ -2334,15 +2335,18 @@ package paths before launch, and hot-reloads MCP connections. Explicit `tools.mc
 configuration wins over a plugin server if their host names collide. The v1 host currently
 supports plugin `stdio` servers; unsupported remote transports are skipped independently.
 
+Treat enabled plugins as local code running with the nanobot user's privileges. Manifest
+permissions are descriptive; nanobot does not currently enforce them with an OS sandbox.
+
 Plugins may optionally declare a shell-free `extensions.dev.nanobot.installCommand` array. The
 local WebUI runs it once per plugin version before first enable; remote WebUI clients cannot run
 plugin setup unless remote package installation was explicitly allowed. Agent Plugins v1 does
 not define a registry, so package distribution remains separate from discovery and execution.
 
 CLI Apps installed from the WebUI use the same package layout. nanobot installs the CLI through
-its catalog adapter, then writes a skills-only Agent Plugin under `<workspace>/plugins/`; updates
-refresh that package and uninstall removes it. The external executable remains managed by the
-CLI Apps installer rather than by the Agent Plugins manifest.
+its catalog adapter, then writes and enables a skills-only Agent Plugin under
+`<workspace>/plugins/`; updates refresh that package and uninstall removes it. The external
+executable remains managed by the CLI Apps installer rather than by the Agent Plugins manifest.
 
 ## Tool Hint Max Length
 

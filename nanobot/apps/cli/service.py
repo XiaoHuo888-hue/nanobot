@@ -1149,11 +1149,14 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
             shutil.rmtree(legacy_dir)
 
     def _record_installed(self, app: dict[str, Any]) -> dict[str, Any]:
+        from nanobot.agent.agent_plugins import set_agent_plugin_enabled
+
         installed = self._load_installed()
         entry = self._installed_entry(app)
         installed[str(app["name"])] = entry
         self._save_installed(installed)
         self.install_skill(app)
+        set_agent_plugin_enabled(self.workspace, _safe_skill_name(str(app["name"])), True)
         return entry
 
     def install(self, name: str) -> dict[str, Any]:

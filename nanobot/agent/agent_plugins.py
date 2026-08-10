@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from filelock import FileLock
 from loguru import logger
 
 from nanobot.config.loader import get_config_path
@@ -41,6 +42,7 @@ _MCP_SERVER_FIELDS = {
     "stdio": {"type", "command", "args", "env", "cwd"},
 }
 _SETUP_ENV = {"HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER"}
+_SETUP_TIMEOUT_SECONDS = 600
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,15 @@ def discover_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
     skills: list[AgentPluginSkill] = []
     for plugin in discover_agent_plugins(workspace):
         skills.extend(_discover_plugin_skills(plugin.name, plugin.root))
+    return skills
+
+
+def enabled_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
+    """Return skills from plugins the user has explicitly enabled."""
+    skills: list[AgentPluginSkill] = []
+    for plugin in discover_agent_plugins(workspace):
+        if _enabled(workspace, plugin.name):
+            skills.extend(_discover_plugin_skills(plugin.name, plugin.root))
     return skills
 
 
@@ -214,18 +225,21 @@ def agent_plugins_payload(workspace: Path) -> dict[str, Any]:
 
 
 def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> dict[str, Any]:
-    """Enable or disable one installed plugin's executable MCP components."""
+    """Enable or disable one installed plugin."""
     plugin = next((item for item in discover_agent_plugins(workspace) if item.name == name), None)
     if plugin is None:
         raise ValueError(f"unknown Agent Plugin '{name}'")
     data = _plugin_data_dir(workspace, plugin.name, create=True)
-    if enabled:
-        if plugin.install_command and _setup_version(workspace, plugin.name) != (plugin.version or "unknown"):
-            _run_install(plugin, data)
-            _write_state(data / "setup-version", plugin.version or "unknown")
-        _write_state(data / "enabled", "1")
-    else:
-        (data / "enabled").unlink(missing_ok=True)
+    with FileLock(str(data / ".state.lock"), timeout=_SETUP_TIMEOUT_SECONDS + 10):
+        if enabled:
+            if plugin.install_command and _setup_version(workspace, plugin.name) != (
+                plugin.version or "unknown"
+            ):
+                _run_install(plugin, data)
+                _write_state(data / "setup-version", plugin.version or "unknown")
+            _write_state(data / "enabled", "1")
+        else:
+            (data / "enabled").unlink(missing_ok=True)
     payload = agent_plugins_payload(workspace)
     payload["last_action"] = {
         "ok": True,
@@ -478,7 +492,7 @@ def _run_install(plugin: AgentPlugin, data: Path) -> None:
             env=env,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=_SETUP_TIMEOUT_SECONDS,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:

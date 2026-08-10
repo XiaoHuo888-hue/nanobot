@@ -9,8 +9,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from nanobot.agent import agent_plugins
 from nanobot.agent.agent_plugins import discover_agent_plugin_skills
+from nanobot.agent.skills import SkillsLoader
 from nanobot.apps.cli.service import CliAppError, CliAppManager, CliAppsRuntimeConfig
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plugin_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        agent_plugins,
+        "get_config_path",
+        lambda: tmp_path / "config" / "config.json",
+    )
 
 
 def _write_cache(path: Path, registry: dict) -> None:
@@ -418,6 +429,11 @@ def test_install_dispatches_safe_pip_and_installs_skill(
     assert [item.name for item in discover_agent_plugin_skills(manager.workspace)] == [
         "cli-app-gimp"
     ]
+    assert [
+        item["name"]
+        for item in SkillsLoader(manager.workspace).list_skills()
+        if item["source"] == "plugin"
+    ] == ["cli-app-gimp"]
     assert not legacy.exists()
 
 

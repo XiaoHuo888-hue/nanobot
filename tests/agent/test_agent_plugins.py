@@ -1,7 +1,10 @@
 import json
 import shutil
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import Any, cast
 
 import pytest
@@ -16,6 +19,15 @@ from nanobot.agent.agent_plugins import (
     set_agent_plugin_enabled,
 )
 from nanobot.agent.skills import SkillsLoader
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plugin_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        agent_plugins,
+        "get_config_path",
+        lambda: tmp_path / "config" / "config.json",
+    )
 
 
 def _write_skill(root: Path, name: str, *, description: str = "Plugin skill.") -> Path:
@@ -48,6 +60,7 @@ def _write_plugin(
 def test_skills_loader_discovers_agent_plugin_skill(tmp_path: Path) -> None:
     plugin = _write_plugin(tmp_path, "acme-tools")
     _write_skill(plugin, "release-notes", description="Draft release notes from changes.")
+    set_agent_plugin_enabled(tmp_path, "acme-tools", True)
 
     loader = SkillsLoader(tmp_path, builtin_skills_dir=tmp_path / "builtin")
 
@@ -71,6 +84,7 @@ def test_skills_loader_sees_plugin_installed_after_startup(tmp_path: Path) -> No
 
     plugin = _write_plugin(tmp_path, "acme-tools")
     _write_skill(plugin, "release-notes")
+    set_agent_plugin_enabled(tmp_path, "acme-tools", True)
 
     assert [entry["name"] for entry in loader.list_skills()] == ["release-notes"]
 
@@ -152,6 +166,7 @@ def test_invalid_agent_skill_is_skipped(
 def test_workspace_skill_overrides_plugin_skill(tmp_path: Path) -> None:
     plugin = _write_plugin(tmp_path, "demo")
     _write_skill(plugin, "shared", description="Plugin version.")
+    set_agent_plugin_enabled(tmp_path, "demo", True)
     workspace_skill = tmp_path / "skills" / "shared"
     workspace_skill.mkdir(parents=True)
     (workspace_skill / "SKILL.md").write_text(
@@ -163,6 +178,36 @@ def test_workspace_skill_overrides_plugin_skill(tmp_path: Path) -> None:
 
     assert [entry["source"] for entry in loader.list_skills()] == ["workspace"]
     assert "Workspace version" in (loader.load_skill("shared") or "")
+
+
+def test_disabled_plugin_skill_cannot_shadow_or_inject_builtin_skill(tmp_path: Path) -> None:
+    plugin = _write_plugin(tmp_path, "demo")
+    skill = _write_skill(plugin, "shared", description="Plugin version.")
+    (skill / "SKILL.md").write_text(
+        "---\nname: shared\ndescription: Plugin version.\nalways: true\n---\n\nPlugin body.\n",
+        encoding="utf-8",
+    )
+    builtin = tmp_path / "builtin"
+    builtin_skill = builtin / "shared"
+    builtin_skill.mkdir(parents=True)
+    (builtin_skill / "SKILL.md").write_text(
+        "---\nname: shared\ndescription: Built-in version.\n---\n\nBuilt-in body.\n",
+        encoding="utf-8",
+    )
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+
+    assert [entry["source"] for entry in loader.list_skills()] == ["builtin"]
+    assert "Built-in version" in (loader.load_skill("shared") or "")
+    assert loader.get_always_skills() == []
+
+    set_agent_plugin_enabled(tmp_path, "demo", True)
+    assert [entry["source"] for entry in loader.list_skills()] == ["plugin"]
+    assert "Plugin body" in (loader.load_skill("shared") or "")
+    assert loader.get_always_skills() == ["shared"]
+
+    set_agent_plugin_enabled(tmp_path, "demo", False)
+    assert [entry["source"] for entry in loader.list_skills()] == ["builtin"]
+    assert "Built-in version" in (loader.load_skill("shared") or "")
 
 
 def test_plugin_skill_symlink_cannot_escape_plugin_root(tmp_path: Path) -> None:
@@ -182,12 +227,7 @@ def test_plugin_skill_symlink_cannot_escape_plugin_root(tmp_path: Path) -> None:
     assert discover_agent_plugin_skills(tmp_path) == []
 
 
-def test_plugin_mcp_requires_explicit_enable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        agent_plugins,
-        "get_config_path",
-        lambda: tmp_path / "config" / "config.json",
-    )
+def test_plugin_mcp_requires_explicit_enable(tmp_path: Path) -> None:
     plugin = _write_plugin(tmp_path, "desktop")
     executable = plugin / "bin" / "server"
     executable.parent.mkdir()
@@ -228,11 +268,6 @@ def test_plugin_setup_command_runs_once_per_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        agent_plugins,
-        "get_config_path",
-        lambda: tmp_path / "config" / "config.json",
-    )
     monkeypatch.setenv("NANOBOT_TEST_SECRET", "do-not-inherit")
     plugin = _write_plugin(
         tmp_path,
@@ -266,15 +301,46 @@ def test_plugin_setup_command_runs_once_per_version(
     assert agent_plugins_payload(tmp_path)["plugins"][0]["setup_required"] is False
 
 
-def test_invalid_plugin_mcp_entries_do_not_block_valid_servers(
+def test_concurrent_plugin_enable_runs_setup_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        agent_plugins,
-        "get_config_path",
-        lambda: tmp_path / "config" / "config.json",
+    plugin = _write_plugin(
+        tmp_path,
+        "desktop",
+        manifest={
+            "$schema": AGENT_PLUGIN_SCHEMA,
+            "name": "desktop",
+            "version": "1.2.3",
+            "extensions": {"dev.nanobot": {"installCommand": ["./bin/install"]}},
+        },
     )
+    executable = plugin / "bin" / "install"
+    executable.parent.mkdir()
+    executable.write_text("setup", encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+
+    def run(command: tuple[str, ...], **_: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        time.sleep(0.1)
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(agent_plugins.subprocess, "run", run)
+    ready = Barrier(2)
+
+    def enable() -> None:
+        ready.wait()
+        set_agent_plugin_enabled(tmp_path, "desktop", True)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(enable) for _ in range(2)]
+        for future in futures:
+            future.result()
+
+    assert calls == [(str(executable),)]
+
+
+def test_invalid_plugin_mcp_entries_do_not_block_valid_servers(tmp_path: Path) -> None:
     plugin = _write_plugin(tmp_path, "network")
     executable = plugin / "bin" / "server"
     executable.parent.mkdir()
