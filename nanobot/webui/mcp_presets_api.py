@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -16,7 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Mapping, cast
 
-from nanobot.agent.agent_plugins import agent_plugins_payload, set_agent_plugin_enabled
+from nanobot.agent.plugins import (
+    AgentPluginState,
+    discover_agent_plugin_states,
+    set_agent_plugin_enabled,
+)
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.apps.protocol import app_manifest, compact_dict
 from nanobot.config.loader import load_config, resolve_config_env_vars, save_config
@@ -52,6 +57,12 @@ _MAX_TEST_TOOLS = 16
 _DEFAULT_TEST_TIMEOUT = 20
 _DEFAULT_CUSTOM_TIMEOUT = 30
 _CUSTOM_ACTIONS = {"custom", "import", "import-cursor", "tools"}
+_PLUGIN_LOGO_MIME_TYPES = {
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 McpReload = Callable[[], Awaitable[dict[str, Any]]]
 
@@ -841,38 +852,45 @@ def _custom_payload(
     }
 
 
-def _agent_plugin_payload(plugin: Mapping[str, Any]) -> dict[str, Any]:
-    enabled = bool(plugin.get("enabled"))
-    permissions = plugin.get("permissions")
-    mcp_servers = plugin.get("mcp_servers")
-    permission_names = (
-        [str(item) for item in cast(list[object], permissions)]
-        if isinstance(permissions, list)
-        else []
+def _plugin_logo_data_url(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    suffix = path.suffix.lower()
+    valid = (
+        suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")
+        or suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff")
+        or suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
     )
-    server_names = (
-        [str(item) for item in cast(list[object], mcp_servers)]
-        if isinstance(mcp_servers, list)
-        else []
-    )
+    if not valid:
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{_PLUGIN_LOGO_MIME_TYPES[suffix]};base64,{encoded}"
+
+
+def _agent_plugin_payload(state: AgentPluginState) -> dict[str, Any]:
+    plugin = state.plugin
     return {
-        "name": f"plugin-{plugin['name']}",
-        "display_name": str(plugin.get("display_name") or plugin["name"]),
-        "category": str(plugin.get("category") or "plugin"),
-        "description": str(plugin.get("description") or "Agent Plugin"),
-        "docs_url": str(plugin.get("repository") or ""),
+        "name": f"plugin-{plugin.name}",
+        "display_name": plugin.display_name,
+        "category": plugin.category,
+        "description": plugin.description or "Agent Plugin",
+        "docs_url": plugin.repository,
         "transport": "stdio",
-        "requires": ", ".join(permission_names),
+        "requires": ", ".join(plugin.permissions),
         "note": "",
         "install_supported": True,
         "installed": True,
-        "configured": enabled,
-        "available": enabled,
-        "status": "configured" if enabled else "not_installed",
-        "logo_url": plugin.get("logo_url"),
-        "brand_color": plugin.get("accent_color"),
+        "configured": state.enabled,
+        "available": state.enabled,
+        "status": "configured" if state.enabled else "not_installed",
+        "logo_url": _plugin_logo_data_url(plugin.logo),
+        "brand_color": plugin.accent_color,
         "required_fields": [],
-        "connection_summary": ", ".join(server_names),
+        "connection_summary": ", ".join(state.mcp_servers),
         "enabled_tools": ["*"],
         "tool_names": [],
         "source": "agent-plugin",
@@ -897,12 +915,16 @@ def mcp_presets_payload(
         for name, cfg in sorted(config.tools.mcp_servers.items())
         if name not in known
     ]
-    plugin_state = agent_plugins_payload(config.workspace_path)
+    plugin_states = [
+        state
+        for state in discover_agent_plugin_states(config.workspace_path)
+        if state.mcp_servers or state.plugin.install_command
+    ]
     existing_names = {str(row["name"]) for row in (*preset_rows, *custom_rows)}
     plugin_rows = [
         row
-        for plugin in plugin_state["plugins"]
-        if (row := _agent_plugin_payload(plugin))["name"] not in existing_names
+        for state in plugin_states
+        if (row := _agent_plugin_payload(state))["name"] not in existing_names
     ]
     payload: dict[str, Any] = {
         "presets": [*preset_rows, *custom_rows, *plugin_rows],
@@ -1440,20 +1462,22 @@ async def mcp_presets_settings_action(
         plugin_config = load_config(config_path) if config_path is not None else load_config()
         plugin_name = name.removeprefix("plugin-")
         installed = {
-            str(plugin["name"])
-            for plugin in agent_plugins_payload(plugin_config.workspace_path)["plugins"]
+            state.plugin.name
+            for state in discover_agent_plugin_states(plugin_config.workspace_path)
+            if state.mcp_servers or state.plugin.install_command
         }
         if name not in plugin_config.tools.mcp_servers and plugin_name in installed:
             if action not in {"enable", "remove"}:
                 raise McpPresetError("Agent Plugins support enable and disable actions only")
-            state = await asyncio.to_thread(
+            plugin = await asyncio.to_thread(
                 set_agent_plugin_enabled,
                 plugin_config.workspace_path,
                 plugin_name,
                 action == "enable",
             )
+            verb = "enabled" if action == "enable" else "disabled"
             payload = mcp_presets_payload(
-                last_action=state.get("last_action"),
+                last_action={"ok": True, "message": f"{plugin.display_name} {verb}."},
                 config_path=config_path,
             )
             if reload_mcp is not None:

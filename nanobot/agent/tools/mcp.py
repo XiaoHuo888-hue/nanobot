@@ -1286,7 +1286,7 @@ async def reload_servers(state: Any, registry: ToolRegistry) -> dict[str, Any]:
                 "requires_restart": True,
             }
         try:
-            from nanobot.agent.agent_plugins import agent_plugin_mcp_servers
+            from nanobot.agent.plugins import agent_plugin_mcp_servers
             from nanobot.config.loader import load_config, resolve_config_env_vars
 
             config = resolve_config_env_vars(load_config())

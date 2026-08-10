@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
@@ -44,12 +43,7 @@ _MCP_SERVER_FIELDS = {
 }
 _SETUP_ENV = {"HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER"}
 _SETUP_TIMEOUT_SECONDS = 600
-_LOGO_MIME_TYPES = {
-    ".jpeg": "image/jpeg",
-    ".jpg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-}
+_LOGO_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 _MAX_LOGO_BYTES = 256 * 1024
 
 
@@ -77,6 +71,16 @@ class AgentPlugin:
     logo: Path | None
     permissions: tuple[str, ...]
     install_command: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AgentPluginState:
+    """Runtime state for one discovered Agent Plugin."""
+
+    plugin: AgentPlugin
+    mcp_servers: tuple[str, ...]
+    enabled: bool
+    setup_required: bool
 
 
 def discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
@@ -205,37 +209,23 @@ def agent_plugin_mcp_servers(
     return servers
 
 
-def agent_plugins_payload(workspace: Path) -> dict[str, Any]:
-    """Return installed Agent Plugins for the WebUI Apps surface."""
-    plugins: list[dict[str, Any]] = []
-    enabled_count = 0
+def discover_agent_plugin_states(workspace: Path) -> list[AgentPluginState]:
+    """Return component and lifecycle state for discovered plugins."""
+    states: list[AgentPluginState] = []
     for plugin in discover_agent_plugins(workspace):
-        mcp_servers = sorted(_plugin_mcp_servers(workspace, plugin))
-        if not mcp_servers and not plugin.install_command:
-            continue
-        enabled = _enabled(workspace, plugin.name)
-        enabled_count += int(enabled)
-        plugins.append(
-            {
-                "name": plugin.name,
-                "display_name": plugin.display_name,
-                "version": plugin.version,
-                "description": plugin.description,
-                "category": plugin.category,
-                "repository": plugin.repository,
-                "accent_color": plugin.accent_color,
-                "logo_url": _plugin_logo_data_url(plugin.logo),
-                "permissions": list(plugin.permissions),
-                "mcp_servers": mcp_servers,
-                "enabled": enabled,
-                "setup_required": bool(plugin.install_command)
+        states.append(
+            AgentPluginState(
+                plugin=plugin,
+                mcp_servers=tuple(sorted(_plugin_mcp_servers(workspace, plugin))),
+                enabled=_enabled(workspace, plugin.name),
+                setup_required=bool(plugin.install_command)
                 and _setup_version(workspace, plugin.name) != (plugin.version or "unknown"),
-            }
+            )
         )
-    return {"plugins": plugins, "enabled_count": enabled_count}
+    return states
 
 
-def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> dict[str, Any]:
+def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> AgentPlugin:
     """Enable or disable one installed plugin."""
     plugin = next((item for item in discover_agent_plugins(workspace) if item.name == name), None)
     if plugin is None:
@@ -251,12 +241,7 @@ def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> dict[
             _write_state(data / "enabled", "1")
         else:
             (data / "enabled").unlink(missing_ok=True)
-    payload = agent_plugins_payload(workspace)
-    payload["last_action"] = {
-        "ok": True,
-        "message": f"{plugin.display_name} {'enabled' if enabled else 'disabled'}.",
-    }
-    return payload
+    return plugin
 
 
 def _valid_optional_fields(payload: dict[str, Any]) -> bool:
@@ -302,7 +287,7 @@ def _plugin_logo(value: object, plugin_root: Path) -> Path | None:
         logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
         return None
     logo = _contained_file(plugin_root / value[2:], plugin_root)
-    if logo is None or logo.suffix.lower() not in _LOGO_MIME_TYPES:
+    if logo is None or logo.suffix.lower() not in _LOGO_SUFFIXES:
         logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
         return None
     try:
@@ -312,26 +297,6 @@ def _plugin_logo(value: object, plugin_root: Path) -> Path | None:
     except OSError:
         return None
     return logo
-
-
-def _plugin_logo_data_url(path: Path | None) -> str | None:
-    if path is None:
-        return None
-    try:
-        data = path.read_bytes()
-    except OSError:
-        return None
-    suffix = path.suffix.lower()
-    valid = (
-        suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")
-        or suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff")
-        or suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
-    )
-    if not valid:
-        logger.warning("Ignoring malformed Agent Plugin logo '{}'", path)
-        return None
-    encoded = base64.b64encode(data).decode("ascii")
-    return f"data:{_LOGO_MIME_TYPES[suffix]};base64,{encoded}"
 
 
 def _install_command(value: object, plugin_root: Path) -> tuple[str, ...]:

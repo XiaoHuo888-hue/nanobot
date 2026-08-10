@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from nanobot.agent import agent_plugins
-from nanobot.agent.agent_plugins import discover_agent_plugin_skills
+from nanobot.agent import plugins as agent_plugins
+from nanobot.agent.plugins import discover_agent_plugin_skills
 from nanobot.agent.skills import SkillsLoader
 from nanobot.apps.cli.service import CliAppError, CliAppManager, CliAppsRuntimeConfig
 

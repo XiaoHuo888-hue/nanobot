@@ -17,7 +17,7 @@ from typing import Any, cast
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
-from nanobot.agent.agent_plugins import agent_plugins_payload
+from nanobot.agent.plugins import discover_agent_plugin_states
 from nanobot.agent.tools.image_generation import request_image_generation_reload
 from nanobot.agent.tools.mcp import request_mcp_reload
 from nanobot.api.runtime import ApiRuntime, ApiStartOptions, api_runtime_paths
@@ -1221,8 +1221,9 @@ class WebUISettingsRouter:
             if action == "enable" and name.startswith("plugin-"):
                 config = load_config()
                 plugin_names = {
-                    f"plugin-{plugin['name']}"
-                    for plugin in agent_plugins_payload(config.workspace_path)["plugins"]
+                    f"plugin-{state.plugin.name}"
+                    for state in discover_agent_plugin_states(config.workspace_path)
+                    if state.mcp_servers or state.plugin.install_command
                 }
                 if (
                     name not in config.tools.mcp_servers

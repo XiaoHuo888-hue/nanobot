@@ -485,7 +485,7 @@ class AgentLoop:
             config,
             provider_snapshot_loader,
         )
-        from nanobot.agent.agent_plugins import agent_plugin_mcp_servers
+        from nanobot.agent.plugins import agent_plugin_mcp_servers
 
         return cls(
             bus=bus,

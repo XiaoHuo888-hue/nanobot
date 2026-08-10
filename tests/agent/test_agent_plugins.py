@@ -9,13 +9,13 @@ from typing import Any, cast
 
 import pytest
 
-from nanobot.agent import agent_plugins
-from nanobot.agent.agent_plugins import (
+from nanobot.agent import plugins as agent_plugins
+from nanobot.agent.plugins import (
     AGENT_PLUGIN_MCP_SCHEMA,
     AGENT_PLUGIN_SCHEMA,
     agent_plugin_mcp_servers,
-    agent_plugins_payload,
     discover_agent_plugin_skills,
+    discover_agent_plugin_states,
     set_agent_plugin_enabled,
 )
 from nanobot.agent.skills import SkillsLoader
@@ -142,7 +142,7 @@ def test_unknown_manifest_fields_and_non_object_extensions_are_ignored(tmp_path:
     assert [skill.name for skill in discover_agent_plugin_skills(tmp_path)] == ["example"]
 
 
-def test_agent_plugin_payload_embeds_contained_raster_logo(tmp_path: Path) -> None:
+def test_agent_plugin_discovers_contained_raster_logo(tmp_path: Path) -> None:
     plugin = _write_plugin(
         tmp_path,
         "demo",
@@ -155,22 +155,7 @@ def test_agent_plugin_payload_embeds_contained_raster_logo(tmp_path: Path) -> No
     assets = plugin / "assets"
     assets.mkdir()
     (assets / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
-    executable = plugin / "bin" / "server"
-    executable.parent.mkdir()
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    (plugin / "mcp.json").write_text(
-        json.dumps(
-            {
-                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
-                "mcpServers": {"demo": {"type": "stdio", "command": "./bin/server"}},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    logo_url = agent_plugins_payload(tmp_path)["plugins"][0]["logo_url"]
-
-    assert logo_url == "data:image/png;base64,iVBORw0KGgpsb2dv"
+    assert agent_plugins.discover_agent_plugins(tmp_path)[0].logo == assets / "icon.png"
 
 
 def test_agent_plugin_logo_cannot_escape_package(tmp_path: Path) -> None:
@@ -351,7 +336,7 @@ def test_plugin_setup_command_runs_once_per_version(
     assert calls[0][0] == (str(executable),)
     assert calls[0][1]["PLUGIN_ROOT"] == str(plugin)
     assert "NANOBOT_TEST_SECRET" not in calls[0][1]
-    assert agent_plugins_payload(tmp_path)["plugins"][0]["setup_required"] is False
+    assert discover_agent_plugin_states(tmp_path)[0].setup_required is False
 
 
 def test_concurrent_plugin_enable_runs_setup_once(

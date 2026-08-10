@@ -60,7 +60,7 @@ class SkillsLoader:
         Returns:
             List of skill info dicts with 'name', 'path', 'source'.
         """
-        from nanobot.agent.agent_plugins import enabled_agent_plugin_skills
+        from nanobot.agent.plugins import enabled_agent_plugin_skills
 
         plugin_skills = enabled_agent_plugin_skills(self.workspace)
         skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
@@ -102,7 +102,7 @@ class SkillsLoader:
         workspace_path = self.workspace_skills / name / "SKILL.md"
         if workspace_path.exists():
             return workspace_path.read_text(encoding="utf-8")
-        from nanobot.agent.agent_plugins import enabled_agent_plugin_skills
+        from nanobot.agent.plugins import enabled_agent_plugin_skills
 
         for plugin_skill in enabled_agent_plugin_skills(self.workspace):
             if plugin_skill.name == name and plugin_skill.path.is_file():
