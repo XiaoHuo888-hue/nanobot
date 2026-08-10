@@ -573,6 +573,7 @@
       "mcpLabel": "整合",
       "pluginLabel": "外掛",
       "pluginEnabled": "外掛已啟用",
+      "pluginEnable": "啟用外掛",
       "pluginDisable": "停用",
       "channelLabel": "通訊管道",
       "featureLabel": "功能",

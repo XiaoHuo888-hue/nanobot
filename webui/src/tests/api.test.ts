@@ -882,6 +882,13 @@ describe("webui API helpers", () => {
       { name: "browserbase", browserbase_api_key: "bb_live_test" },
       20_000,
     );
+
+    await runMcpPresetAction(mutationTransport, "disable", "plugin-desktop");
+    expect(requestMutation).toHaveBeenCalledWith(
+      "settings.mcp.disable",
+      { name: "plugin-desktop" },
+      20_000,
+    );
   });
 
   it("serializes custom MCP, mcp.json import, and tool allowlist actions", async () => {

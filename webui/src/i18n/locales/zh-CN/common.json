@@ -587,6 +587,7 @@
       "mcpLabel": "集成",
       "pluginLabel": "插件",
       "pluginEnabled": "插件已启用",
+      "pluginEnable": "启用插件",
       "pluginDisable": "停用",
       "channelLabel": "渠道",
       "featureLabel": "能力",

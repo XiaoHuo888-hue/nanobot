@@ -573,6 +573,7 @@
       "mcpLabel": "連携",
       "pluginLabel": "プラグイン",
       "pluginEnabled": "プラグインは有効です",
+      "pluginEnable": "プラグインを有効にする",
       "pluginDisable": "無効にする",
       "channelLabel": "チャンネル",
       "featureLabel": "機能",

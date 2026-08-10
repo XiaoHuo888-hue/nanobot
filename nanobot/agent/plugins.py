@@ -1,4 +1,4 @@
-"""Discover portable Agent Plugins from the agent workspace."""
+"""Load and activate locally installed Agent Plugin packages."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ class AgentPluginSkill:
 
 @dataclass(frozen=True)
 class AgentPlugin:
-    """A validated Agent Plugins v1 package installed in the workspace."""
+    """A validated, locally installed Agent Plugins v1 package."""
 
     name: str
     root: Path
@@ -84,7 +84,7 @@ class AgentPluginState:
 
 
 def discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
-    """Return valid packages from ``<workspace>/plugins/*``."""
+    """Return installed packages found under ``<workspace>/plugins/*``."""
     workspace = workspace.expanduser().resolve()
     plugins_root = workspace / "plugins"
     if not plugins_root.is_dir():
@@ -114,11 +114,11 @@ def discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
 
 
 def discover_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
-    """Discover direct-child skills under ``<workspace>/plugins/*``.
+    """Return skills supplied by locally installed plugin packages.
 
-    Agent Plugins does not prescribe an install location. nanobot uses the
-    workspace ``plugins`` directory so packages stay explicit and portable
-    with the rest of the agent workspace.
+    The portable format does not prescribe acquisition or installation UX.
+    nanobot currently treats package presence in the workspace ``plugins``
+    directory as installed; activation remains a separate trust decision.
     """
     skills: list[AgentPluginSkill] = []
     for plugin in discover_agent_plugins(workspace):

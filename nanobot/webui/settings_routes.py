@@ -95,6 +95,7 @@ def _channel_connect_route(path: str) -> tuple[str, str] | None:
 
 _MCP_PRESET_ACTIONS_BY_PATH = {
     "/api/settings/mcp-presets/enable": "enable",
+    "/api/settings/mcp-presets/disable": "disable",
     "/api/settings/mcp-presets/remove": "remove",
     "/api/settings/mcp-presets/test": "test",
     "/api/settings/mcp-presets/custom": "custom",
@@ -1219,15 +1220,19 @@ class WebUISettingsRouter:
             query = self._parse_mcp_settings_query(request)
             name = (_query_first(query, "name") or "").strip()
             if action == "enable" and name.startswith("plugin-"):
-                config = load_config()
-                plugin_names = {
-                    f"plugin-{state.plugin.name}"
-                    for state in discover_agent_plugin_states(config.workspace_path)
-                    if state.mcp_servers or state.plugin.install_command
-                }
+                config = self.settings.config.load()
+                plugin_state = next(
+                    (
+                        state
+                        for state in discover_agent_plugin_states(config.workspace_path)
+                        if f"plugin-{state.plugin.name}" == name
+                    ),
+                    None,
+                )
                 if (
                     name not in config.tools.mcp_servers
-                    and name in plugin_names
+                    and plugin_state is not None
+                    and plugin_state.setup_required
                     and not self._allow_feature_package_install(connection, request)
                 ):
                     return self._error_response(

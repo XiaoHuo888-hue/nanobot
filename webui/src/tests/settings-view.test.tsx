@@ -652,7 +652,7 @@ describe("SettingsView Apps catalog", () => {
     expect(screen.queryByText("Uninstalled CLI for AnyGen.")).not.toBeInTheDocument();
   });
 
-  it("sets up and enables an installed Agent Plugin explicitly", async () => {
+  it("enables and disables an installed Agent Plugin explicitly", async () => {
     const plugin = {
       name: "plugin-computer-use",
       display_name: "Computer Use",
@@ -662,11 +662,12 @@ describe("SettingsView Apps catalog", () => {
       transport: "stdio",
       requires: "screen-recording, accessibility",
       note: "",
-      install_supported: true,
+      install_supported: false,
       installed: true,
-      configured: false,
+      configured: true,
+      enabled: false,
       available: false,
-      status: "not_installed",
+      status: "disabled",
       logo_url: null,
       brand_color: "#ff7a1a",
       required_fields: [],
@@ -682,16 +683,20 @@ describe("SettingsView Apps catalog", () => {
       if (url === "/api/settings/mcp-presets") {
         return jsonResponse({ presets: [plugin], installed_count: 0 });
       }
-      if (url === "/api/settings/mcp-presets/enable?name=plugin-computer-use") {
-        return jsonResponse({
-          presets: [{ ...plugin, configured: true, available: true, status: "configured" }],
-          installed_count: 1,
-          last_action: { ok: true, message: "Computer Use enabled." },
-        });
-      }
       return jsonResponse({});
     });
     vi.stubGlobal("fetch", fetchMock);
+    requestMutationMock
+      .mockResolvedValueOnce({
+        presets: [{ ...plugin, enabled: true, available: true, status: "enabled" }],
+        installed_count: 1,
+        last_action: { ok: true, message: "Computer Use enabled." },
+      })
+      .mockResolvedValueOnce({
+        presets: [{ ...plugin, enabled: false, available: false, status: "disabled" }],
+        installed_count: 0,
+        last_action: { ok: true, message: "Computer Use disabled." },
+      });
 
     renderSettingsView();
 
@@ -700,16 +705,30 @@ describe("SettingsView Apps catalog", () => {
     expect(
       screen.getByText("Control the desktop with a live preview. · screen-recording, accessibility"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Enable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enable plugin" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings/mcp-presets/enable?name=plugin-computer-use",
-        expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
+      expect(requestMutationMock).toHaveBeenCalledWith(
+        "settings.mcp.enable",
+        { name: "plugin-computer-use" },
+        20_000,
       );
     });
     expect(await screen.findByText("Computer Use enabled.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Plugin enabled" })).toBeInTheDocument();
+    const enabledButton = screen.getByRole("button", { name: "Plugin enabled" });
+    await waitFor(() => expect(enabledButton).toBeEnabled());
+    fireEvent.pointerDown(enabledButton, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Disable" }));
+
+    await waitFor(() => {
+      expect(requestMutationMock).toHaveBeenCalledWith(
+        "settings.mcp.disable",
+        { name: "plugin-computer-use" },
+        20_000,
+      );
+    });
+    expect(await screen.findByText("Computer Use disabled.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enable plugin" })).toBeInTheDocument();
   });
 
   it("keeps runtime dependencies out of Apps and explains chat mentions", async () => {

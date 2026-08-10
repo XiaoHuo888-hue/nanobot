@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ComponentPropsWithoutRef,
   type FormEvent,
   type ReactNode,
   type SetStateAction,
@@ -1987,7 +1988,7 @@ export function SettingsView({
   };
 
   const handleMcpPresetAction = async (
-    action: "enable" | "remove" | "test",
+    action: "enable" | "disable" | "remove" | "test",
     name: string,
     values: Record<string, string> = {},
   ) => {
@@ -7381,7 +7382,7 @@ function AppsCatalogSettings({
   onQueryChange: (value: string) => void;
   onFilterChange: (value: AppsKindFilter) => void;
   onCliAction: (action: "install" | "update" | "uninstall" | "test", name: string) => void;
-  onMcpAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
+  onMcpAction: (action: "enable" | "disable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
   onDismissStatus: () => void;
   onBackToChat: () => void;
   onMcpFieldChange: (presetName: string, fieldName: string, value: string) => void;
@@ -7686,7 +7687,7 @@ function McpAppsCatalogRow({
   actionKey: string | null;
   showBrandLogos: boolean;
   onFieldChange: (presetName: string, fieldName: string, value: string) => void;
-  onAction: (action: "enable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
+  onAction: (action: "enable" | "disable" | "remove" | "test", name: string, values?: Record<string, string>) => void;
   onToolsChange: (name: string, enabledTools: string[]) => void;
 }) {
   const { t } = useTranslation();
@@ -7694,15 +7695,17 @@ function McpAppsCatalogRow({
   const [setupOpen, setSetupOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const enableBusy = actionKey === `enable:${preset.name}`;
+  const disableBusy = actionKey === `disable:${preset.name}`;
   const removeBusy = actionKey === `remove:${preset.name}`;
   const testBusy = actionKey === `test:${preset.name}`;
   const toolsBusy = actionKey === `tools:${preset.name}`;
-  const busy = enableBusy || removeBusy || testBusy || toolsBusy;
+  const busy = enableBusy || disableBusy || removeBusy || testBusy || toolsBusy;
   const agentPlugin = preset.source === "agent-plugin";
   const missingFields = preset.required_fields.filter((field) => field.required && !field.configured);
   const hasFields = preset.required_fields.length > 0;
   const needsSetupInput = missingFields.length > 0;
-  const readyInstalled = preset.installed && preset.configured;
+  const pluginEnabled = agentPlugin && preset.enabled === true;
+  const readyInstalled = agentPlugin ? pluginEnabled : preset.installed && preset.configured;
   const canEnable =
     preset.install_supported &&
     (missingFields.length === 0 || missingFields.every((field) => Boolean(values[field.name]?.trim())));
@@ -7764,7 +7767,7 @@ function McpAppsCatalogRow({
                 <DropdownMenuTrigger asChild>
                   <AppsActionButton
                     ariaLabel={statusLabel}
-                    busy={testBusy || toolsBusy}
+                    busy={testBusy || toolsBusy || disableBusy}
                     disabled={busy}
                     tone="installed"
                   >
@@ -7787,7 +7790,7 @@ function McpAppsCatalogRow({
                   <DropdownMenuItem
                     tone={agentPlugin ? undefined : "destructive"}
                     disabled={busy}
-                    onClick={() => onAction("remove", preset.name)}
+                    onClick={() => onAction(agentPlugin ? "disable" : "remove", preset.name)}
                   >
                     {agentPlugin ? <PauseCircle aria-hidden /> : <Trash2 aria-hidden />}
                     {agentPlugin
@@ -7808,6 +7811,14 @@ function McpAppsCatalogRow({
                 </AppsActionButton>
               ) : null}
             </>
+          ) : agentPlugin && preset.installed ? (
+            <AppsActionButton
+              ariaLabel={tx("settings.apps.pluginEnable", "Enable plugin")}
+              busy={enableBusy}
+              onClick={() => onAction("enable", preset.name, values)}
+            >
+              <PlayCircle className="h-4 w-4" aria-hidden />
+            </AppsActionButton>
           ) : preset.installed && !preset.configured ? (
             <AppsActionButton
               ariaLabel={hasFields ? tx("settings.mcp.configure", "Configure") : tx("settings.mcp.enable", "Enable")}
@@ -7970,23 +7981,22 @@ function AppsTypeBadge({ children }: { children: ReactNode }) {
   );
 }
 
-const AppsActionButton = forwardRef<HTMLButtonElement, {
+const AppsActionButton = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<typeof Button> & {
   ariaLabel: string;
   busy?: boolean;
-  disabled?: boolean;
   tone?: "default" | "installed" | "danger";
-  onClick?: () => void;
-  children: ReactNode;
 }>(function AppsActionButton({
   ariaLabel,
   busy,
   disabled,
   tone = "default",
-  onClick,
+  className,
   children,
+  ...props
 }, ref) {
   return (
     <Button
+      {...props}
       ref={ref}
       type="button"
       size="icon"
@@ -7994,12 +8004,12 @@ const AppsActionButton = forwardRef<HTMLButtonElement, {
       aria-label={ariaLabel}
       title={ariaLabel}
       disabled={disabled || busy}
-      onClick={onClick}
       className={cn(
         "h-9 w-9 rounded-full text-muted-foreground transition-colors",
         tone === "installed" && "bg-transparent hover:bg-muted/70 hover:text-foreground",
         tone === "danger" && "bg-transparent hover:bg-destructive/10 hover:text-destructive",
         tone === "default" && "bg-muted/70 hover:bg-muted hover:text-foreground",
+        className,
       )}
     >
       {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : children}
@@ -8012,7 +8022,9 @@ function appsTitle(item: AppsCatalogItem): string {
 }
 
 function appsReady(item: AppsCatalogItem): boolean {
-  return item.kind === "cli" ? item.app.installed : item.preset.installed && item.preset.configured;
+  if (item.kind === "cli") return item.app.installed;
+  if (item.preset.source === "agent-plugin") return item.preset.enabled === true;
+  return item.preset.installed && item.preset.configured;
 }
 
 function appsSearchText(item: AppsCatalogItem): string {

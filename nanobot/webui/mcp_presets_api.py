@@ -882,11 +882,12 @@ def _agent_plugin_payload(state: AgentPluginState) -> dict[str, Any]:
         "transport": "stdio",
         "requires": ", ".join(plugin.permissions),
         "note": "",
-        "install_supported": True,
+        "install_supported": False,
         "installed": True,
-        "configured": state.enabled,
+        "configured": not state.setup_required,
+        "enabled": state.enabled,
         "available": state.enabled,
-        "status": "configured" if state.enabled else "not_installed",
+        "status": "enabled" if state.enabled else "disabled",
         "logo_url": _plugin_logo_data_url(plugin.logo),
         "brand_color": plugin.accent_color,
         "required_fields": [],
@@ -929,7 +930,7 @@ def mcp_presets_payload(
     payload: dict[str, Any] = {
         "presets": [*preset_rows, *custom_rows, *plugin_rows],
         "installed_count": len(config.tools.mcp_servers)
-        + sum(int(row["configured"]) for row in plugin_rows),
+        + sum(int(row["enabled"]) for row in plugin_rows),
     }
     if last_action is not None:
         payload["last_action"] = last_action
@@ -1467,7 +1468,7 @@ async def mcp_presets_settings_action(
             if state.mcp_servers or state.plugin.install_command
         }
         if name not in plugin_config.tools.mcp_servers and plugin_name in installed:
-            if action not in {"enable", "remove"}:
+            if action not in {"enable", "disable"}:
                 raise McpPresetError("Agent Plugins support enable and disable actions only")
             plugin = await asyncio.to_thread(
                 set_agent_plugin_enabled,

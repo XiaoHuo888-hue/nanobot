@@ -573,6 +573,7 @@
       "mcpLabel": "Integrasi",
       "pluginLabel": "Plugin",
       "pluginEnabled": "Plugin aktif",
+      "pluginEnable": "Aktifkan plugin",
       "pluginDisable": "Nonaktifkan",
       "channelLabel": "Kanal",
       "featureLabel": "Fitur",

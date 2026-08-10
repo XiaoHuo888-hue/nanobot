@@ -574,6 +574,7 @@
       "mcpLabel": "Integración",
       "pluginLabel": "Plugin",
       "pluginEnabled": "Plugin activado",
+      "pluginEnable": "Activar plugin",
       "pluginDisable": "Desactivar",
       "channelLabel": "Canal",
       "featureLabel": "Función",

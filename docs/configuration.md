@@ -2308,9 +2308,10 @@ Disabled skills are excluded from the main agent's skill summary, from always-on
 
 ### Agent Plugins v1
 
-nanobot also discovers portable [Agent Plugins](https://agent-plugins.org/) placed under
-`<workspace>/plugins/<plugin>/`. A supported package has a root `plugin.json` that targets
-Agent Plugins v1 and may provide skills, MCP servers, or both:
+nanobot also loads locally installed [Agent Plugins](https://agent-plugins.org/) from
+`<workspace>/plugins/<plugin>/`. Package presence in this directory is the installation state;
+enabling it is a separate trust decision. A supported package has a root `plugin.json` that
+targets Agent Plugins v1 and may provide skills, MCP servers, or both:
 
 ```text
 plugins/
@@ -2340,8 +2341,11 @@ permissions are descriptive; nanobot does not currently enforce them with an OS 
 
 Plugins may optionally declare a shell-free `extensions.dev.nanobot.installCommand` array. The
 local WebUI runs it once per plugin version before first enable; remote WebUI clients cannot run
-plugin setup unless remote package installation was explicitly allowed. Agent Plugins v1 does
-not define a registry, so package distribution remains separate from discovery and execution.
+plugin setup unless remote package installation was explicitly allowed. Enabling an already set
+up package does not install it and is allowed remotely. Agent Plugins v1 deliberately leaves
+distribution and installation UX to each host. A future catalog can therefore acquire, verify,
+and place a package atomically before handing it to this same runtime; users should still see one
+Install action, not separate download and installation steps.
 
 The optional `extensions.dev.nanobot.logo` field points to a packaged PNG, JPEG, or WebP asset
 such as `./assets/icon.png`. nanobot only reads contained raster files up to 256 KiB and embeds

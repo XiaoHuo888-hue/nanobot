@@ -114,8 +114,11 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
     assert row["name"] == "plugin-desktop"
     assert row["display_name"] == "Desktop Control"
     assert row["logo_url"] == "data:image/png;base64,iVBORw0KGgpsb2dv"
+    assert row["install_supported"] is False
     assert row["installed"] is True
-    assert row["configured"] is False
+    assert row["configured"] is True
+    assert row["enabled"] is False
+    assert row["status"] == "disabled"
 
     async def reload() -> dict[str, object]:
         return {"ok": True, "message": "MCP reloaded.", "requires_restart": False}
@@ -128,18 +131,30 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
         )
     )
     enabled_row = next(item for item in enabled["presets"] if item["name"] == "plugin-desktop")
-    assert enabled_row["configured"] is True
+    assert enabled_row["enabled"] is True
+    assert enabled_row["status"] == "enabled"
     assert enabled["requires_restart"] is False
 
     disabled = asyncio.run(
         mcp_presets_settings_action(
-            "remove",
+            "disable",
             {"name": ["plugin-desktop"]},
             reload_mcp=reload,
         )
     )
     disabled_row = next(item for item in disabled["presets"] if item["name"] == "plugin-desktop")
-    assert disabled_row["configured"] is False
+    assert disabled_row["installed"] is True
+    assert disabled_row["configured"] is True
+    assert disabled_row["enabled"] is False
+    assert disabled_row["status"] == "disabled"
+
+    with pytest.raises(McpPresetError, match="enable and disable"):
+        asyncio.run(
+            mcp_presets_settings_action(
+                "remove",
+                {"name": ["plugin-desktop"]},
+            )
+        )
 
 
 def test_explicit_mcp_config_wins_over_plugin_catalog_name(
