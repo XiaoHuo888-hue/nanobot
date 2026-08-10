@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,10 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
 ) -> None:
     _use_config(tmp_path, monkeypatch)
     _write_agent_plugin(load_config().workspace_path)
+    monkeypatch.setattr(
+        "nanobot.agent.plugins.subprocess.run",
+        lambda command, **_: subprocess.CompletedProcess(command, 0, "", ""),
+    )
 
     row = next(item for item in mcp_presets_payload()["presets"] if item["source"] == "agent-plugin")
     assert row["name"] == "plugin-desktop"
