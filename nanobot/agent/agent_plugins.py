@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -43,6 +44,13 @@ _MCP_SERVER_FIELDS = {
 }
 _SETUP_ENV = {"HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER"}
 _SETUP_TIMEOUT_SECONDS = 600
+_LOGO_MIME_TYPES = {
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+_MAX_LOGO_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,7 @@ class AgentPlugin:
     display_name: str
     category: str
     accent_color: str | None
+    logo: Path | None
     permissions: tuple[str, ...]
     install_command: tuple[str, ...]
 
@@ -167,6 +176,7 @@ def _load_manifest(plugin_root: Path) -> AgentPlugin | None:
         display_name=_string(nanobot.get("displayName")) or name,
         category=_string(nanobot.get("category")) or "Plugin",
         accent_color=_accent_color(nanobot.get("accentColor")),
+        logo=_plugin_logo(nanobot.get("logo"), plugin_root),
         permissions=_string_tuple(nanobot.get("permissions")),
         install_command=_install_command(nanobot.get("installCommand"), plugin_root),
     )
@@ -214,6 +224,7 @@ def agent_plugins_payload(workspace: Path) -> dict[str, Any]:
                 "category": plugin.category,
                 "repository": plugin.repository,
                 "accent_color": plugin.accent_color,
+                "logo_url": _plugin_logo_data_url(plugin.logo),
                 "permissions": list(plugin.permissions),
                 "mcp_servers": mcp_servers,
                 "enabled": enabled,
@@ -281,6 +292,46 @@ def _string_tuple(value: object) -> tuple[str, ...]:
 
 def _accent_color(value: object) -> str | None:
     return value if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) else None
+
+
+def _plugin_logo(value: object, plugin_root: Path) -> Path | None:
+    """Resolve nanobot's optional packaged logo extension."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.startswith("./"):
+        logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
+        return None
+    logo = _contained_file(plugin_root / value[2:], plugin_root)
+    if logo is None or logo.suffix.lower() not in _LOGO_MIME_TYPES:
+        logger.warning("Ignoring invalid Agent Plugin logo in '{}'", plugin_root)
+        return None
+    try:
+        if logo.stat().st_size > _MAX_LOGO_BYTES:
+            logger.warning("Ignoring oversized Agent Plugin logo in '{}'", plugin_root)
+            return None
+    except OSError:
+        return None
+    return logo
+
+
+def _plugin_logo_data_url(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    suffix = path.suffix.lower()
+    valid = (
+        suffix == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")
+        or suffix in {".jpg", ".jpeg"} and data.startswith(b"\xff\xd8\xff")
+        or suffix == ".webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    )
+    if not valid:
+        logger.warning("Ignoring malformed Agent Plugin logo '{}'", path)
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{_LOGO_MIME_TYPES[suffix]};base64,{encoded}"
 
 
 def _install_command(value: object, plugin_root: Path) -> tuple[str, ...]:

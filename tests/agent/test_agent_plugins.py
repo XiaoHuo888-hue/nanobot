@@ -142,6 +142,59 @@ def test_unknown_manifest_fields_and_non_object_extensions_are_ignored(tmp_path:
     assert [skill.name for skill in discover_agent_plugin_skills(tmp_path)] == ["example"]
 
 
+def test_agent_plugin_payload_embeds_contained_raster_logo(tmp_path: Path) -> None:
+    plugin = _write_plugin(
+        tmp_path,
+        "demo",
+        manifest={
+            "$schema": AGENT_PLUGIN_SCHEMA,
+            "name": "demo",
+            "extensions": {"dev.nanobot": {"logo": "./assets/icon.png"}},
+        },
+    )
+    assets = plugin / "assets"
+    assets.mkdir()
+    (assets / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
+    executable = plugin / "bin" / "server"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    (plugin / "mcp.json").write_text(
+        json.dumps(
+            {
+                "$schema": AGENT_PLUGIN_MCP_SCHEMA,
+                "mcpServers": {"demo": {"type": "stdio", "command": "./bin/server"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    logo_url = agent_plugins_payload(tmp_path)["plugins"][0]["logo_url"]
+
+    assert logo_url == "data:image/png;base64,iVBORw0KGgpsb2dv"
+
+
+def test_agent_plugin_logo_cannot_escape_package(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\nlogo")
+    plugin = _write_plugin(
+        tmp_path,
+        "demo",
+        manifest={
+            "$schema": AGENT_PLUGIN_SCHEMA,
+            "name": "demo",
+            "extensions": {"dev.nanobot": {"logo": "./assets/icon.png"}},
+        },
+    )
+    assets = plugin / "assets"
+    assets.mkdir()
+    try:
+        (assets / "icon.png").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable: {exc}")
+
+    assert agent_plugins.discover_agent_plugins(tmp_path)[0].logo is None
+
+
 @pytest.mark.parametrize(
     ("skill_name", "frontmatter"),
     [

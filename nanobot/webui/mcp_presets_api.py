@@ -869,7 +869,7 @@ def _agent_plugin_payload(plugin: Mapping[str, Any]) -> dict[str, Any]:
         "configured": enabled,
         "available": enabled,
         "status": "configured" if enabled else "not_installed",
-        "logo_url": None,
+        "logo_url": plugin.get("logo_url"),
         "brand_color": plugin.get("accent_color"),
         "required_fields": [],
         "connection_summary": ", ".join(server_names),

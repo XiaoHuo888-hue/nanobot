@@ -8303,6 +8303,7 @@ function McpPresetLogo({ preset, showBrandLogos }: { preset: McpPresetInfo; show
   const bg = preset.brand_color || "hsl(var(--muted))";
   const logoUrls = useMemo(() => logoFallbackUrls(preset.logo_url), [preset.logo_url]);
   const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(logoUrls);
+  const packagedLogo = preset.logo_url?.startsWith("data:image/") === true;
   const initials = preset.display_name
     .split(/\s+/)
     .filter(Boolean)
@@ -8310,7 +8311,7 @@ function McpPresetLogo({ preset, showBrandLogos }: { preset: McpPresetInfo; show
     .map((part) => part[0]?.toUpperCase())
     .join("") || preset.name.slice(0, 2).toUpperCase();
 
-  if (showBrandLogos && logoUrl) {
+  if ((showBrandLogos || packagedLogo) && logoUrl) {
     return (
       <span
         className="grid h-11 w-11 shrink-0 place-items-center rounded-[8px] border border-border/45 bg-background"

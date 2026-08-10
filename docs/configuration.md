@@ -2343,6 +2343,10 @@ local WebUI runs it once per plugin version before first enable; remote WebUI cl
 plugin setup unless remote package installation was explicitly allowed. Agent Plugins v1 does
 not define a registry, so package distribution remains separate from discovery and execution.
 
+The optional `extensions.dev.nanobot.logo` field points to a packaged PNG, JPEG, or WebP asset
+such as `./assets/icon.png`. nanobot only reads contained raster files up to 256 KiB and embeds
+them locally in the Apps catalog; invalid or missing assets fall back to the plugin initials.
+
 CLI Apps installed from the WebUI use the same package layout. nanobot installs the CLI through
 its catalog adapter, then writes and enables a skills-only Agent Plugin under
 `<workspace>/plugins/`; updates refresh that package and uninstall removes it. The external

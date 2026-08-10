@@ -33,6 +33,9 @@ def _write_agent_plugin(workspace: Path) -> None:
     command = root / "bin" / "server"
     command.parent.mkdir(parents=True, exist_ok=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
+    assets = root / "assets"
+    assets.mkdir()
+    (assets / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
     (root / "plugin.json").write_text(
         json.dumps(
             {
@@ -43,6 +46,7 @@ def _write_agent_plugin(workspace: Path) -> None:
                     "dev.nanobot": {
                         "displayName": "Desktop Control",
                         "accentColor": "#ff7a1a",
+                        "logo": "./assets/icon.png",
                         "permissions": ["screen-recording"],
                     }
                 },
@@ -109,6 +113,7 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
     row = next(item for item in mcp_presets_payload()["presets"] if item["source"] == "agent-plugin")
     assert row["name"] == "plugin-desktop"
     assert row["display_name"] == "Desktop Control"
+    assert row["logo_url"] == "data:image/png;base64,iVBORw0KGgpsb2dv"
     assert row["installed"] is True
     assert row["configured"] is False
 
