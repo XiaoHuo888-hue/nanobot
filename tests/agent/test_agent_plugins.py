@@ -14,8 +14,8 @@ from nanobot.agent.plugins import (
     AGENT_PLUGIN_MCP_SCHEMA,
     AGENT_PLUGIN_SCHEMA,
     agent_plugin_mcp_servers,
-    discover_agent_plugin_skills,
     discover_agent_plugin_states,
+    enabled_agent_plugin_skills,
     set_agent_plugin_enabled,
 )
 from nanobot.agent.skills import SkillsLoader
@@ -55,6 +55,10 @@ def _write_plugin(
     }
     (root / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
     return root
+
+
+def _loaded_plugin_skills(workspace: Path) -> list[str]:
+    return [skill.name for skill in enabled_agent_plugin_skills(workspace)]
 
 
 def test_skills_loader_discovers_agent_plugin_skill(tmp_path: Path) -> None:
@@ -103,8 +107,9 @@ def test_agent_plugin_skills_are_direct_children_only(tmp_path: Path) -> None:
         "---\nname: nested\ndescription: Nested skill.\n---\n",
         encoding="utf-8",
     )
+    set_agent_plugin_enabled(tmp_path, "acme-tools", True)
 
-    assert [skill.name for skill in discover_agent_plugin_skills(tmp_path)] == ["direct"]
+    assert _loaded_plugin_skills(tmp_path) == ["direct"]
 
 
 @pytest.mark.parametrize(
@@ -123,7 +128,7 @@ def test_invalid_agent_plugin_manifest_is_skipped(
     plugin = _write_plugin(tmp_path, "demo", manifest=manifest)
     _write_skill(plugin, "example")
 
-    assert discover_agent_plugin_skills(tmp_path) == []
+    assert discover_agent_plugin_states(tmp_path) == []
 
 
 def test_unknown_manifest_fields_and_non_object_extensions_are_ignored(tmp_path: Path) -> None:
@@ -138,8 +143,9 @@ def test_unknown_manifest_fields_and_non_object_extensions_are_ignored(tmp_path:
         },
     )
     _write_skill(plugin, "example")
+    set_agent_plugin_enabled(tmp_path, "demo", True)
 
-    assert [skill.name for skill in discover_agent_plugin_skills(tmp_path)] == ["example"]
+    assert _loaded_plugin_skills(tmp_path) == ["example"]
 
 
 def test_agent_plugin_discovers_contained_raster_logo(tmp_path: Path) -> None:
@@ -155,7 +161,7 @@ def test_agent_plugin_discovers_contained_raster_logo(tmp_path: Path) -> None:
     assets = plugin / "assets"
     assets.mkdir()
     (assets / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
-    assert agent_plugins.discover_agent_plugins(tmp_path)[0].logo == assets / "icon.png"
+    assert discover_agent_plugin_states(tmp_path)[0].plugin.logo == assets / "icon.png"
 
 
 def test_agent_plugin_logo_cannot_escape_package(tmp_path: Path) -> None:
@@ -177,7 +183,7 @@ def test_agent_plugin_logo_cannot_escape_package(tmp_path: Path) -> None:
     except OSError as exc:
         pytest.skip(f"file symlink unavailable: {exc}")
 
-    assert agent_plugins.discover_agent_plugins(tmp_path)[0].logo is None
+    assert discover_agent_plugin_states(tmp_path)[0].plugin.logo is None
 
 
 @pytest.mark.parametrize(
@@ -197,8 +203,9 @@ def test_invalid_agent_skill_is_skipped(
     skill = plugin / "skills" / skill_name
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(f"---\n{frontmatter}\n---\n", encoding="utf-8")
+    set_agent_plugin_enabled(tmp_path, "demo", True)
 
-    assert discover_agent_plugin_skills(tmp_path) == []
+    assert _loaded_plugin_skills(tmp_path) == []
 
 
 def test_workspace_skill_overrides_plugin_skill(tmp_path: Path) -> None:
@@ -261,8 +268,9 @@ def test_plugin_skill_symlink_cannot_escape_plugin_root(tmp_path: Path) -> None:
         )
     except OSError as exc:
         pytest.skip(f"directory symlink unavailable: {exc}")
+    set_agent_plugin_enabled(tmp_path, "demo", True)
 
-    assert discover_agent_plugin_skills(tmp_path) == []
+    assert _loaded_plugin_skills(tmp_path) == []
 
 
 def test_plugin_mcp_requires_explicit_enable(tmp_path: Path) -> None:

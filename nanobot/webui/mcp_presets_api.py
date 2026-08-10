@@ -1453,6 +1453,7 @@ async def mcp_presets_settings_action(
     *,
     reload_mcp: McpReload | None = None,
     config: WebUISettingsConfig | None = None,
+    remote: bool = False,
 ) -> dict[str, Any]:
     """Run a WebUI MCP preset action and hot-reload the agent when config changes."""
     config_path = config.path if config is not None else None
@@ -1462,14 +1463,28 @@ async def mcp_presets_settings_action(
     if name.startswith("plugin-"):
         plugin_config = load_config(config_path) if config_path is not None else load_config()
         plugin_name = name.removeprefix("plugin-")
-        installed = {
-            state.plugin.name
-            for state in discover_agent_plugin_states(plugin_config.workspace_path)
-            if state.mcp_servers or state.plugin.install_command
-        }
-        if name not in plugin_config.tools.mcp_servers and plugin_name in installed:
+        plugin_state = next(
+            (
+                state
+                for state in discover_agent_plugin_states(plugin_config.workspace_path)
+                if state.plugin.name == plugin_name
+                and (state.mcp_servers or state.plugin.install_command)
+            ),
+            None,
+        )
+        if name not in plugin_config.tools.mcp_servers and plugin_state is not None:
             if action not in {"enable", "disable"}:
                 raise McpPresetError("Agent Plugins support enable and disable actions only")
+            if (
+                action == "enable"
+                and plugin_state.setup_required
+                and remote
+                and not plugin_config.tools.webui_allow_remote_package_install
+            ):
+                raise McpPresetError(
+                    "Agent Plugin setup is restricted to the local WebUI",
+                    status=403,
+                )
             plugin = await asyncio.to_thread(
                 set_agent_plugin_enabled,
                 plugin_config.workspace_path,

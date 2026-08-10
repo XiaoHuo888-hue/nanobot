@@ -230,6 +230,15 @@ def _plugin_skill_relative_path(name: str) -> str:
     return f"plugins/{skill_name}/skills/{skill_name}/SKILL.md"
 
 
+def cli_app_skill_relative_path(workspace: Path, name: str) -> str:
+    """Return a CLI App's skill path, including the legacy location."""
+    canonical = Path(_plugin_skill_relative_path(name))
+    legacy = Path("skills") / _legacy_skill_name(name) / "SKILL.md"
+    if not (workspace / canonical).is_file() and (workspace / legacy).is_file():
+        return legacy.as_posix()
+    return canonical.as_posix()
+
+
 def _has_shell_meta(command: str) -> bool:
     return any(char in command for char in _SHELL_META_CHARS)
 
@@ -628,7 +637,7 @@ class CliAppManager:
                     "name": installed_name,
                     "entry_point": entry_point,
                     "source": str(data.get("source") or ""),
-                    "skill": self.skill_relative_path(installed_name),
+                    "skill": cli_app_skill_relative_path(self.workspace, installed_name),
                     "tool": "run_cli_app",
                 }
             )
@@ -653,22 +662,6 @@ class CliAppManager:
             return False
         install_cmd = str(app.get("install_cmd") or "")
         return not _has_shell_meta(install_cmd)
-
-    def _skill_path(self, name: str) -> Path:
-        skill_name = _safe_skill_name(name)
-        return self.workspace / "plugins" / skill_name / "skills" / skill_name / "SKILL.md"
-
-    def _legacy_skill_path(self, name: str) -> Path:
-        return self.workspace / "skills" / _legacy_skill_name(name) / "SKILL.md"
-
-    def _installed_skill_path(self, name: str) -> Path:
-        path = self._skill_path(name)
-        legacy_path = self._legacy_skill_path(name)
-        return legacy_path if not path.is_file() and legacy_path.is_file() else path
-
-    def skill_relative_path(self, name: str) -> str:
-        """Return the existing skill path, falling back to the canonical plugin path."""
-        return self._installed_skill_path(name).relative_to(self.workspace).as_posix()
 
     def _app_payload(
         self,
@@ -705,7 +698,7 @@ class CliAppManager:
             "status": status,
             "logo_url": logo_url,
             "brand_color": brand_color,
-            "skill_installed": self._installed_skill_path(name).is_file(),
+            "skill_installed": (self.workspace / cli_app_skill_relative_path(self.workspace, name)).is_file(),
             "manifest": self._manifest_payload(app, logo_url=logo_url, brand_color=brand_color),
         }
 
@@ -1121,7 +1114,7 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
         return f"---\n{frontmatter.strip()}\n---\n\n{body}"
 
     def install_skill(self, app: dict[str, Any]) -> Path:
-        path = self._skill_path(str(app["name"]))
+        path = self.workspace / _plugin_skill_relative_path(str(app["name"]))
         path.parent.mkdir(parents=True, exist_ok=True)
         content = self._fetch_skill_content(app) or self._fallback_skill(app)
         content = self._normalise_skill(content, app)
@@ -1135,16 +1128,16 @@ Use the `run_cli_app` tool with `name="{name}"` for command execution. Do not in
             "description": _catalog_description(app),
         })
         _write_json(plugin_root / "plugin.json", manifest)
-        legacy_dir = self._legacy_skill_path(str(app["name"])).parent
+        legacy_dir = self.workspace / "skills" / _legacy_skill_name(str(app["name"]))
         if legacy_dir.is_dir():
             shutil.rmtree(legacy_dir)
         return path
 
     def remove_skill(self, name: str) -> None:
-        plugin_root = self._skill_path(name).parents[2]
+        plugin_root = (self.workspace / _plugin_skill_relative_path(name)).parents[2]
         if plugin_root.is_dir():
             shutil.rmtree(plugin_root)
-        legacy_dir = self._legacy_skill_path(name).parent
+        legacy_dir = self.workspace / "skills" / _legacy_skill_name(name)
         if legacy_dir.is_dir():
             shutil.rmtree(legacy_dir)
 

@@ -10,7 +10,6 @@ from types import SimpleNamespace
 import pytest
 
 from nanobot.agent import plugins as agent_plugins
-from nanobot.agent.plugins import discover_agent_plugin_skills
 from nanobot.agent.skills import SkillsLoader
 from nanobot.apps.cli.service import CliAppError, CliAppManager, CliAppsRuntimeConfig
 
@@ -426,9 +425,6 @@ def test_install_dispatches_safe_pip_and_installs_skill(
     }
     assert "name: cli-app-gimp" in skill.read_text(encoding="utf-8")
     assert 'run_cli_app` tool with `name="gimp"' in skill.read_text(encoding="utf-8")
-    assert [item.name for item in discover_agent_plugin_skills(manager.workspace)] == [
-        "cli-app-gimp"
-    ]
     assert [
         item["name"]
         for item in SkillsLoader(manager.workspace).list_skills()

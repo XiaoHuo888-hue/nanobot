@@ -17,7 +17,6 @@ from typing import Any, cast
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
-from nanobot.agent.plugins import discover_agent_plugin_states
 from nanobot.agent.tools.image_generation import request_image_generation_reload
 from nanobot.agent.tools.mcp import request_mcp_reload
 from nanobot.api.runtime import ApiRuntime, ApiStartOptions, api_runtime_paths
@@ -1218,32 +1217,12 @@ class WebUISettingsRouter:
             return self._unauthorized()
         try:
             query = self._parse_mcp_settings_query(request)
-            name = (_query_first(query, "name") or "").strip()
-            if action == "enable" and name.startswith("plugin-"):
-                config = self.settings.config.load()
-                plugin_state = next(
-                    (
-                        state
-                        for state in discover_agent_plugin_states(config.workspace_path)
-                        if f"plugin-{state.plugin.name}" == name
-                    ),
-                    None,
-                )
-                if (
-                    name not in config.tools.mcp_servers
-                    and plugin_state is not None
-                    and plugin_state.setup_required
-                    and not self._allow_feature_package_install(connection, request)
-                ):
-                    return self._error_response(
-                        403,
-                        "Agent Plugin setup is restricted to the local WebUI",
-                    )
             payload = await mcp_presets_settings_action(
                 action,
                 query,
                 reload_mcp=lambda: request_mcp_reload(self.bus),
                 config=self.settings.config,
+                remote=not _is_local_browser_request(connection, request.headers),
             )
         except Exception as e:
             status = getattr(e, "status", 500)

@@ -83,7 +83,7 @@ class AgentPluginState:
     setup_required: bool
 
 
-def discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
+def _discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
     """Return installed packages found under ``<workspace>/plugins/*``."""
     workspace = workspace.expanduser().resolve()
     plugins_root = workspace / "plugins"
@@ -113,23 +113,10 @@ def discover_agent_plugins(workspace: Path) -> list[AgentPlugin]:
     return plugins
 
 
-def discover_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
-    """Return skills supplied by locally installed plugin packages.
-
-    The portable format does not prescribe acquisition or installation UX.
-    nanobot currently treats package presence in the workspace ``plugins``
-    directory as installed; activation remains a separate trust decision.
-    """
-    skills: list[AgentPluginSkill] = []
-    for plugin in discover_agent_plugins(workspace):
-        skills.extend(_discover_plugin_skills(plugin.name, plugin.root))
-    return skills
-
-
 def enabled_agent_plugin_skills(workspace: Path) -> list[AgentPluginSkill]:
     """Return skills from plugins the user has explicitly enabled."""
     skills: list[AgentPluginSkill] = []
-    for plugin in discover_agent_plugins(workspace):
+    for plugin in _discover_agent_plugins(workspace):
         if _enabled(workspace, plugin.name):
             skills.extend(_discover_plugin_skills(plugin.name, plugin.root))
     return skills
@@ -195,7 +182,7 @@ def agent_plugin_mcp_servers(
     User configuration wins on the unlikely event of a namespaced collision.
     """
     servers: dict[str, MCPServerConfig] = {}
-    for plugin in discover_agent_plugins(workspace):
+    for plugin in _discover_agent_plugins(workspace):
         if not _enabled(workspace, plugin.name):
             continue
         plugin_servers = _plugin_mcp_servers(workspace, plugin)
@@ -212,7 +199,7 @@ def agent_plugin_mcp_servers(
 def discover_agent_plugin_states(workspace: Path) -> list[AgentPluginState]:
     """Return component and lifecycle state for discovered plugins."""
     states: list[AgentPluginState] = []
-    for plugin in discover_agent_plugins(workspace):
+    for plugin in _discover_agent_plugins(workspace):
         states.append(
             AgentPluginState(
                 plugin=plugin,
@@ -227,7 +214,7 @@ def discover_agent_plugin_states(workspace: Path) -> list[AgentPluginState]:
 
 def set_agent_plugin_enabled(workspace: Path, name: str, enabled: bool) -> AgentPlugin:
     """Enable or disable one installed plugin."""
-    plugin = next((item for item in discover_agent_plugins(workspace) if item.name == name), None)
+    plugin = next((item for item in _discover_agent_plugins(workspace) if item.name == name), None)
     if plugin is None:
         raise ValueError(f"unknown Agent Plugin '{name}'")
     data = _plugin_data_dir(workspace, plugin.name, create=True)

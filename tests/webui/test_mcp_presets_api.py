@@ -33,6 +33,9 @@ def _write_agent_plugin(workspace: Path) -> None:
     command = root / "bin" / "server"
     command.parent.mkdir(parents=True, exist_ok=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
+    setup = root / "bin" / "install"
+    setup.write_text("#!/bin/sh\n", encoding="utf-8")
+    setup.chmod(0o755)
     assets = root / "assets"
     assets.mkdir()
     (assets / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
@@ -48,6 +51,7 @@ def _write_agent_plugin(workspace: Path) -> None:
                         "accentColor": "#ff7a1a",
                         "logo": "./assets/icon.png",
                         "permissions": ["screen-recording"],
+                        "installCommand": ["./bin/install"],
                     }
                 },
             }
@@ -116,12 +120,22 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
     assert row["logo_url"] == "data:image/png;base64,iVBORw0KGgpsb2dv"
     assert row["install_supported"] is False
     assert row["installed"] is True
-    assert row["configured"] is True
+    assert row["configured"] is False
     assert row["enabled"] is False
     assert row["status"] == "disabled"
 
     async def reload() -> dict[str, object]:
         return {"ok": True, "message": "MCP reloaded.", "requires_restart": False}
+
+    with pytest.raises(McpPresetError, match="restricted") as restricted:
+        asyncio.run(
+            mcp_presets_settings_action(
+                "enable",
+                {"name": ["plugin-desktop"]},
+                remote=True,
+            )
+        )
+    assert restricted.value.status == 403
 
     enabled = asyncio.run(
         mcp_presets_settings_action(
@@ -131,6 +145,7 @@ def test_agent_plugin_reuses_mcp_catalog_and_runtime_action(
         )
     )
     enabled_row = next(item for item in enabled["presets"] if item["name"] == "plugin-desktop")
+    assert enabled_row["configured"] is True
     assert enabled_row["enabled"] is True
     assert enabled_row["status"] == "enabled"
     assert enabled["requires_restart"] is False
